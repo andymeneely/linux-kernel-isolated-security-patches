@@ -1,0 +1,11 @@
+--- a/arch/x86_64/kernel/entry.S
++++ b/arch/x86_64/kernel/entry.S
+@@ -832,7 +832,7 @@ paranoid_swapgs:
+ 	swapgs
+ paranoid_restore:	
+ 	RESTORE_ALL 8
+-	iretq
++	jmp iret_label
+ paranoid_userspace:	
+ 	cli
+ 	GET_THREAD_INFO(%rcx)

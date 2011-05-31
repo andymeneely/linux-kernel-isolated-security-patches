@@ -1,0 +1,20 @@
+--- a/arch/i386/kernel/signal.c
++++ b/arch/i386/kernel/signal.c
+@@ -567,6 +567,7 @@ handle_signal(unsigned long sig, siginfo_t *info, struct k_sigaction *ka,
+ 		recalc_sigpending();
+ 		spin_unlock_irq(&current->sighand->siglock);
+ 	}
++	regs->eflags &= ~X86_EFLAGS_DF;
+ }
+ 
+ /*
+--- a/arch/x86_64/kernel/signal.c
++++ b/arch/x86_64/kernel/signal.c
+@@ -408,6 +408,7 @@ handle_signal(unsigned long sig, siginfo_t *info, struct k_sigaction *ka,
+ 		recalc_sigpending();
+ 		spin_unlock_irq(&current->sighand->siglock);
+ 	}
++	regs->eflags &= ~X86_EFLAGS_DF;
+ }
+ 
+ /*

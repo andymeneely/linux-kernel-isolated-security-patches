@@ -1,0 +1,11 @@
+--- linux-2.6.9/drivers/net/pppox.c.orig	2007-06-08 15:31:55.000000000 -0400
++++ linux-2.6.9/drivers/net/pppox.c	2007-06-08 15:32:07.000000000 -0400
+@@ -58,7 +58,7 @@
+ {
+ 	/* Clear connection to ppp device, if attached. */
+ 
+-	if (sk->sk_state & (PPPOX_BOUND | PPPOX_ZOMBIE)) {
++	if (sk->sk_state & (PPPOX_BOUND | PPPOX_CONNECTED | PPPOX_ZOMBIE)) {
+ 		ppp_unregister_channel(&pppox_sk(sk)->chan);
+ 		sk->sk_state = PPPOX_DEAD;
+ 	}

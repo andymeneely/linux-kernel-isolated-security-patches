@@ -1,0 +1,20 @@
+--- linux-2.6.9/fs/ext2/xattr.c.=K0002=.orig
++++ linux-2.6.9/fs/ext2/xattr.c
+@@ -874,6 +874,7 @@ ext2_xattr_cmp(struct ext2_xattr_header 
+ 		if (IS_LAST_ENTRY(entry2))
+ 			return 1;
+ 		if (entry1->e_hash != entry2->e_hash ||
++		    entry1->e_name_index != entry2->e_name_index ||
+ 		    entry1->e_name_len != entry2->e_name_len ||
+ 		    entry1->e_value_size != entry2->e_value_size ||
+ 		    memcmp(entry1->e_name, entry2->e_name, entry1->e_name_len))
+--- linux-2.6.9/fs/ext3/xattr.c.=K0002=.orig
++++ linux-2.6.9/fs/ext3/xattr.c
+@@ -932,6 +932,7 @@ ext3_xattr_cmp(struct ext3_xattr_header 
+ 		if (IS_LAST_ENTRY(entry2))
+ 			return 1;
+ 		if (entry1->e_hash != entry2->e_hash ||
++		    entry1->e_name_index != entry2->e_name_index ||
+ 		    entry1->e_name_len != entry2->e_name_len ||
+ 		    entry1->e_value_size != entry2->e_value_size ||
+ 		    memcmp(entry1->e_name, entry2->e_name, entry1->e_name_len))

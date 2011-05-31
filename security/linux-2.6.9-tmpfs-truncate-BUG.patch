@@ -1,0 +1,11 @@
+--- linux-2.6.9/mm/shmem.c~	2005-03-03 01:59:47.000000000 -0500
++++ linux-2.6.9/mm/shmem.c	2005-03-03 02:00:24.000000000 -0500
+@@ -1108,6 +1108,8 @@ struct page *shmem_nopage(struct vm_area
+ 	idx = (address - vma->vm_start) >> PAGE_SHIFT;
+ 	idx += vma->vm_pgoff;
+ 	idx >>= PAGE_CACHE_SHIFT - PAGE_SHIFT;
++	if (((loff_t) idx << PAGE_CACHE_SHIFT) >= i_size_read(inode))
++		return NOPAGE_SIGBUS;
+ 
+ 	error = shmem_getpage(inode, idx, &page, SGP_CACHE, type);
+ 	if (error)

@@ -1,0 +1,11 @@
+--- linux-2.6.9/include/asm-x86_64/desc.h~	2005-02-07 22:49:44.000000000 -0500
++++ linux-2.6.9/include/asm-x86_64/desc.h	2005-02-07 22:49:56.000000000 -0500
+@@ -128,7 +128,7 @@ static inline void set_tss_desc(unsigned
+ { 
+ 	set_tssldt_descriptor(&cpu_gdt_table[cpu][GDT_ENTRY_TSS], (unsigned long)addr, 
+ 			      DESC_TSS,
+-			      sizeof(struct tss_struct) - 1);
++			      IO_BITMAP_OFFSET + IO_BITMAP_BYTES + 7);
+ } 
+ 
+ static inline void set_ldt_desc(unsigned cpu, void *addr, int size)

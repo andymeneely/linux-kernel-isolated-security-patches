@@ -1,0 +1,30 @@
+--- linux-2.6.10/mm/mmap.c	2004-12-24 22:35:00.000000000 +0100
++++ linux-2.6.10-fixed/mm/mmap.c	2004-12-27 16:37:47.000000000 +0100
+@@ -1360,6 +1360,13 @@ int expand_stack(struct vm_area_struct *
+ 		vm_unacct_memory(grow);
+ 		return -ENOMEM;
+ 	}
++	if ((vma->vm_flags & VM_LOCKED) && !capable(CAP_IPC_LOCK) &&
++			((vma->vm_mm->locked_vm + grow) << PAGE_SHIFT) >
++			current->rlim[RLIMIT_MEMLOCK].rlim_cur) {
++		anon_vma_unlock(vma);
++		vm_unacct_memory(grow);
++		return -ENOMEM;
++	}
+ 	vma->vm_end = address;
+ 	vma->vm_mm->total_vm += grow;
+ 	if (vma->vm_flags & VM_LOCKED)
+@@ -1422,6 +1429,13 @@ int expand_stack(struct vm_area_struct *
+ 		vm_unacct_memory(grow);
+ 		return -ENOMEM;
+ 	}
++	if ((vma->vm_flags & VM_LOCKED) && !capable(CAP_IPC_LOCK) &&
++			((vma->vm_mm->locked_vm + grow) << PAGE_SHIFT) >
++			current->rlim[RLIMIT_MEMLOCK].rlim_cur) {
++		anon_vma_unlock(vma);
++		vm_unacct_memory(grow);
++		return -ENOMEM;
++	}
+ 	vma->vm_start = address;
+ 	vma->vm_pgoff -= grow;
+ 	vma->vm_mm->total_vm += grow;

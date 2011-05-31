@@ -1,0 +1,22 @@
+--- a/net/ipv4/esp4.c
++++ b/net/ipv4/esp4.c
+@@ -151,7 +151,7 @@ static int esp_input(struct xfrm_state *x, struct xfrm_decap_state *decap, struc
+ 	int nfrags;
+ 	int encap_len = 0;
+ 
+-	if (!pskb_may_pull(skb, sizeof(struct ip_esp_hdr)))
++	if (!pskb_may_pull(skb, sizeof(struct ip_esp_hdr) + esp->conf.ivlen))
+ 		goto out;
+ 
+ 	if (elen <= 0 || (elen & (blksize-1)))
+--- a/net/ipv6/esp6.c
++++ b/net/ipv6/esp6.c
+@@ -144,7 +144,7 @@ static int esp6_input(struct xfrm_state *x, struct xfrm_decap_state *decap, stru
+ 	unsigned char *tmp_hdr = NULL;
+ 	int ret = 0;
+ 
+-	if (!pskb_may_pull(skb, sizeof(struct ipv6_esp_hdr))) {
++	if (!pskb_may_pull(skb, sizeof(struct ipv6_esp_hdr) + esp->conf.ivlen)) {
+ 		ret = -EINVAL;
+ 		goto out_nofree;
+ 	}

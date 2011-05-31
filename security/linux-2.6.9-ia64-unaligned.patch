@@ -1,0 +1,11 @@
+--- linux-2.6.9-29.EL.root.ia64.orig/arch/ia64/kernel/unaligned.c
++++ linux-2.6.9-29.EL.root.ia64/arch/ia64/kernel/unaligned.c
+@@ -24,7 +24,7 @@
+ #include <asm/uaccess.h>
+ #include <asm/unaligned.h>
+
+-extern void die_if_kernel(char *str, struct pt_regs *regs, long err) __attribute__ ((noreturn));
++extern void die_if_kernel(char *str, struct pt_regs *regs, long err);
+
+ #undef DEBUG_UNALIGNED_TRAP
+

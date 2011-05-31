@@ -1,0 +1,71 @@
+--- linux-2.6.9/net/ipv4/ipvs/ip_vs_conn.c.orig	2004-10-18 17:55:07.000000000 -0400
++++ linux-2.6.9/net/ipv4/ipvs/ip_vs_conn.c	2005-06-28 14:34:50.000000000 -0400
+@@ -546,7 +546,6 @@ void ip_vs_conn_expire_now(struct ip_vs_
+ {
+ 	if (del_timer(&cp->timer))
+ 		mod_timer(&cp->timer, jiffies);
+-	__ip_vs_conn_put(cp);
+ }
+ 
+ 
+@@ -762,7 +761,6 @@ void ip_vs_random_dropentry(void)
+ {
+ 	int idx;
+ 	struct ip_vs_conn *cp;
+-	struct ip_vs_conn *ct;
+ 
+ 	/*
+ 	 * Randomly scan 1/32 of the whole table every second
+@@ -799,21 +797,12 @@ void ip_vs_random_dropentry(void)
+ 					continue;
+ 			}
+ 
+-			/*
+-			 * Drop the entry, and drop its ct if not referenced
+-			 */
+-			atomic_inc(&cp->refcnt);
+-			ct_write_unlock(hash);
+-
+-			if ((ct = cp->control))
+-				atomic_inc(&ct->refcnt);
+ 			IP_VS_DBG(4, "del connection\n");
+ 			ip_vs_conn_expire_now(cp);
+-			if (ct) {
++			if (cp->control) {
+ 				IP_VS_DBG(4, "del conn template\n");
+-				ip_vs_conn_expire_now(ct);
++				ip_vs_conn_expire_now(cp->control);
+ 			}
+-			ct_write_lock(hash);
+ 		}
+ 		ct_write_unlock(hash);
+ 	}
+@@ -827,7 +816,6 @@ static void ip_vs_conn_flush(void)
+ {
+ 	int idx;
+ 	struct ip_vs_conn *cp;
+-	struct ip_vs_conn *ct;
+ 
+   flush_again:
+ 	for (idx=0; idx<IP_VS_CONN_TAB_SIZE; idx++) {
+@@ -837,18 +825,13 @@ static void ip_vs_conn_flush(void)
+ 		ct_write_lock_bh(idx);
+ 
+ 		list_for_each_entry(cp, &ip_vs_conn_tab[idx], c_list) {
+-			atomic_inc(&cp->refcnt);
+-			ct_write_unlock(idx);
+ 
+-			if ((ct = cp->control))
+-				atomic_inc(&ct->refcnt);
+ 			IP_VS_DBG(4, "del connection\n");
+ 			ip_vs_conn_expire_now(cp);
+-			if (ct) {
++			if (cp->control) {
+ 				IP_VS_DBG(4, "del conn template\n");
+-				ip_vs_conn_expire_now(ct);
++				ip_vs_conn_expire_now(cp->control);
+ 			}
+-			ct_write_lock(idx);
+ 		}
+ 		ct_write_unlock_bh(idx);
+ 	}

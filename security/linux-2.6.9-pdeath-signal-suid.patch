@@ -1,0 +1,52 @@
+[PATCH] Reset current->pdeath_signal on SUID binary execution
+
+This fixes a vulnerability in the "parent process death signal"
+implementation discoverd by Wojciech Purczynski of COSEINC PTE Ltd.
+and iSEC Security Research.
+
+http://marc.info/?l=bugtraq&m=118711306802632&w=2
+
+Signed-off-by: Marcel Holtmann <marcel@holtmann.org>
+
+---
+commit 8542f23e44f591480ca53d215481cbec43b8cbed
+tree d72f29856adb306f20e828d4bab244685fe24bf2
+parent 6adb31c90c47262c8a25bf5097de9b3426caf3ae
+author Marcel Holtmann <marcel@holtmann.org> Fri, 17 Aug 2007 21:41:52 +0200
+committer Marcel Holtmann <marcel@holtmann.org> Fri, 17 Aug 2007 21:41:52 +0200
+
+ fs/exec.c |   13 +++++++++----
+ 1 files changed, 9 insertions(+), 4 deletions(-)
+
+Index: linux-2.6.9/fs/exec.c
+===================================================================
+--- linux-2.6.9.orig/fs/exec.c	2007-08-31 10:59:00.000000000 +0200
++++ linux-2.6.9/fs/exec.c	2007-08-31 11:15:34.000000000 +0200
+@@ -919,9 +919,12 @@ int flush_old_exec(struct linux_binprm *
+ 	current->flags &= ~PF_RELOCEXEC;
+ 	flush_thread();
+ 
+-	if (bprm->e_uid != current->euid || bprm->e_gid != current->egid || 
+-	    permission(bprm->file->f_dentry->d_inode,MAY_READ, NULL) ||
+-	    (bprm->interp_flags & BINPRM_FLAGS_ENFORCE_NONDUMP)) {
++	if (bprm->e_uid != current->euid || bprm->e_gid != current->egid) {
++		suid_keys(current);
++ 		current->mm->dumpable = suid_dumpable;
++		current->pdeath_signal = 0;
++	} else if (permission(bprm->file->f_dentry->d_inode, MAY_READ, NULL) ||
++			(bprm->interp_flags & BINPRM_FLAGS_ENFORCE_NONDUMP)) {
+ 		suid_keys(current);
+ 		current->mm->dumpable = suid_dumpable;
+ 	}
+@@ -1013,8 +1016,10 @@ void compute_creds(struct linux_binprm *
+ {
+ 	int unsafe;
+ 
+-	if (bprm->e_uid != current->uid)
++	if (bprm->e_uid != current->uid) {
+ 		suid_keys(current);
++		current->pdeath_signal = 0;
++	}
+ 	exec_keys(current);
+ 
+ 	task_lock(current);

@@ -1,0 +1,20 @@
+--- linux-2.6.10/net/ipv4/ip_output.c~	2005-03-28 00:32:55.000000000 -0500
++++ linux-2.6.10/net/ipv4/ip_output.c	2005-03-28 00:33:05.000000000 -0500
+@@ -389,6 +389,7 @@ static void ip_copy_metadata(struct sk_b
+ 	to->priority = from->priority;
+ 	to->protocol = from->protocol;
+ 	to->security = from->security;
++	dst_release(to->dst);
+ 	to->dst = dst_clone(from->dst);
+ 	to->dev = from->dev;
+ 
+--- linux-2.6.10/net/ipv6/ip6_output.c~	2005-03-28 00:33:17.000000000 -0500
++++ linux-2.6.10/net/ipv6/ip6_output.c	2005-03-28 00:33:30.000000000 -0500
+@@ -463,6 +463,7 @@ static void ip6_copy_metadata(struct sk_
+ 	to->priority = from->priority;
+ 	to->protocol = from->protocol;
+ 	to->security = from->security;
++	dst_release(to->dst);
+ 	to->dst = dst_clone(from->dst);
+ 	to->dev = from->dev;
+ 

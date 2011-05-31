@@ -1,0 +1,42 @@
+--- linux-rhel4-curr.orig/mm/usercopy.c
++++ linux-rhel4-curr/mm/usercopy.c
+@@ -31,6 +31,8 @@ static inline struct page *pin_page(unsi
+ 	struct page *page = NULL;
+ 	int ret;
+ 
++	if (addr >= current_thread_info()->addr_limit.seg)
++		return NULL;
+ 	/*
+ 	 * Do a quick atomic lookup first - this is the fastpath.
+ 	 */
+--- linux.orig/mm/usercopy.c
++++ linux/mm/usercopy.c
+@@ -32,7 +32,7 @@ static inline struct page *pin_page(unsi
+ 	int ret;
+ 
+ 	if (addr >= current_thread_info()->addr_limit.seg)
+-		return NULL;
++		return (struct page *)-1UL;
+ 	/*
+ 	 * Do a quick atomic lookup first - this is the fastpath.
+ 	 */
+@@ -104,7 +104,8 @@ static int rw_vm(unsigned long addr, voi
+ 		void *maddr;
+ 
+ 		page = pin_page(addr, write, &pte);
+-		if (!page && !pte_present(pte))
++		if ((page == (struct page *)-1UL) ||
++					(!page && !pte_present(pte)))
+ 			break;
+ 
+ 		bytes = len;
+@@ -173,7 +174,8 @@ static int str_vm(unsigned long addr, vo
+ 		char *maddr;
+ 
+ 		page = pin_page(addr, copy == 2, &pte);
+-		if (!page && !pte_present(pte)) {
++		if ((page == (struct page *)-1UL) ||
++					(!page && !pte_present(pte))) {
+ 			spin_unlock(&mm->page_table_lock);
+ 			return -EFAULT;
+ 		}

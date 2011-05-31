@@ -1,0 +1,11 @@
+--- linux-2.6.9/mm/mempolicy.c.larry
++++ linux-2.6.9/mm/mempolicy.c
+@@ -390,7 +390,7 @@ asmlinkage long sys_set_mempolicy(int mo
+ 	struct mempolicy *new;
+ 	DECLARE_BITMAP(nodes, MAX_NUMNODES);
+ 
+-	if (mode > MPOL_MAX)
++	if (mode < 0 || mode > MPOL_MAX)
+ 		return -EINVAL;
+ 	err = get_nodes(nodes, nmask, maxnode, mode);
+ 	if (err)

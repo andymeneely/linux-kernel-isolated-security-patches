@@ -1,0 +1,40 @@
+--- linux-2.6.9/lib/inflate.c.org	2004-10-18 17:54:07.000000000 -0400
++++ linux-2.6.9/lib/inflate.c	2005-08-23 10:37:01.000000000 -0400
+@@ -370,6 +370,7 @@ DEBG("huft5 ");
+     if ((j = *p++) != 0)
+       v[x[j]++] = i;
+   } while (++i < n);
++  n = x[g];			/* set n to length of v */
+ 
+ DEBG("h6 ");
+ 
+@@ -406,12 +407,13 @@ DEBG1("1 ");
+ DEBG1("2 ");
+           f -= a + 1;           /* deduct codes from patterns left */
+           xp = c + k;
+-          while (++j < z)       /* try smaller tables up to z bits */
+-          {
+-            if ((f <<= 1) <= *++xp)
+-              break;            /* enough codes to use up j bits */
+-            f -= *xp;           /* else deduct codes from patterns */
+-          }
++	  if (j < z)
++            while (++j < z)       /* try smaller tables up to z bits */
++            {
++              if ((f <<= 1) <= *++xp)
++                break;            /* enough codes to use up j bits */
++              f -= *xp;           /* else deduct codes from patterns */
++            }
+         }
+ DEBG1("3 ");
+         z = 1 << j;             /* table entries for j-bit table */
+--- linux-2.6.9/arch/ppc64/boot/zlib.c.org	2004-10-18 17:53:22.000000000 -0400
++++ linux-2.6.9/arch/ppc64/boot/zlib.c	2005-10-17 13:29:19.000000000 -0400
+@@ -1351,6 +1351,7 @@ local int huft_build(
+     if ((j = *p++) != 0)
+       v[x[j]++] = i;
+   } while (++i < n);
++  n = x[g];                     /* set n to length of v */
+ 
+ 
+   /* Generate the Huffman codes and for each, make the table entries */

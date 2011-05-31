@@ -1,0 +1,12 @@
+--- linux-2.6.9/drivers/input/serio/serport.c~	2005-03-03 01:55:17.000000000 -0500
++++ linux-2.6.9/drivers/input/serio/serport.c	2005-03-03 01:56:05.000000000 -0500
+@@ -64,6 +64,9 @@ static int serport_ldisc_open(struct tty
+ 	struct serio *serio;
+ 	char name[64];
+ 
++	if (!capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
+ 	serport = kmalloc(sizeof(struct serport), GFP_KERNEL);
+ 	serio = kmalloc(sizeof(struct serio), GFP_KERNEL);
+ 	if (unlikely(!serport || !serio)) {

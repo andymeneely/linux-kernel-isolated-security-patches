@@ -1,0 +1,22 @@
+--- linux-2.6.9.orig/drivers/char/vt_ioctl.c
++++ linux-2.6.9/drivers/char/vt_ioctl.c
+@@ -83,6 +83,9 @@ do_kdsk_ioctl(int cmd, struct kbentry __
+ 	if (copy_from_user(&tmp, user_kbe, sizeof(struct kbentry)))
+ 		return -EFAULT;
+ 
++	if (!capable(CAP_SYS_TTY_CONFIG))
++		perm = 0;
++
+ 	switch (cmd) {
+ 	case KDGKBENT:
+ 		key_map = key_maps[s];
+@@ -195,6 +198,9 @@ do_kdgkb_ioctl(int cmd, struct kbsentry 
+ 	int i, j, k;
+ 	int ret;
+ 
++	if (!capable(CAP_SYS_TTY_CONFIG))
++		perm = 0;
++
+ 	kbs = kmalloc(sizeof(*kbs), GFP_KERNEL);
+ 	if (!kbs) {
+ 		ret = -ENOMEM;

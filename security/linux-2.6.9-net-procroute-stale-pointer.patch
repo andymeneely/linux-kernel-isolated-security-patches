@@ -1,0 +1,39 @@
+# ChangeSet
+#   2005/03/18 21:37:15-08:00 kaber@trash.net 
+#   [PATCH] Fix crash while reading /proc/net/route
+#   
+#   [IPV4]: Fix crash while reading /proc/net/route caused by stale pointers
+#   
+#   Signed-off-by: Patrick McHardy <kaber@trash.net>
+#   Signed-off-by: David S. Miller <davem@davemloft.net>
+#   Signed-off-by: Chris Wright <chrisw@osdl.org>
+#   Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+# 
+--- 1/net/ipv4/fib_hash.c.~1~	2005-03-28 12:56:26.014152784 -0800
++++ 2/net/ipv4/fib_hash.c	2005-03-28 12:56:28.073839664 -0800
+@@ -986,13 +986,23 @@ out:
+ 	return fa;
+ }
+ 
++static struct fib_alias *fib_get_idx(struct seq_file *seq, loff_t pos)
++{
++	struct fib_alias *fa = fib_get_first(seq);
++
++	if (fa)
++		while (pos && (fa = fib_get_next(seq)))
++			--pos;
++	return pos ? NULL : fa;
++}
++
+ static void *fib_seq_start(struct seq_file *seq, loff_t *pos)
+ {
+ 	void *v = NULL;
+ 
+ 	read_lock(&fib_hash_lock);
+ 	if (ip_fib_main_table)
+-		v = *pos ? fib_get_next(seq) : SEQ_START_TOKEN;
++		v = *pos ? fib_get_idx(seq, *pos - 1) : SEQ_START_TOKEN;
+ 	return v;
+ }
+ 
+

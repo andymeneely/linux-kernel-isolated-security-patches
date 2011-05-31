@@ -1,0 +1,147 @@
+--- ./include/linux/smb_mount.h.org	2004-10-18 17:53:06.000000000 -0400
++++ ./include/linux/smb_mount.h	2005-06-23 13:13:42.000000000 -0400
+@@ -38,7 +38,10 @@ struct smb_mount_data {
+ #define SMB_MOUNT_DIRATTR	0x0004	/* Use find_first for getattr */
+ #define SMB_MOUNT_CASE		0x0008	/* Be case sensitive */
+ #define SMB_MOUNT_UNICODE	0x0010	/* Server talks unicode */
+-
++#define SMB_MOUNT_UID		0x0020	/* Use user specified uid */
++#define SMB_MOUNT_GID		0x0040	/* Use user specified gid */
++#define SMB_MOUNT_FMODE		0x0080	/* Use user specified file mode */
++#define SMB_MOUNT_DMODE		0x0100	/* Use user specified dir mode */
+ 
+ struct smb_mount_data_kernel {
+ 	int version;
+--- ./fs/smbfs/inode.c.org	2004-10-18 17:53:21.000000000 -0400
++++ ./fs/smbfs/inode.c	2005-06-27 09:06:12.338278488 -0400
+@@ -383,15 +383,19 @@ parse_options(struct smb_mount_data_kern
+ 			break;
+ 		case 'u':
+ 			mnt->uid = value;
++			flags |= SMB_MOUNT_UID;
+ 			break;
+ 		case 'g':
+ 			mnt->gid = value;
++			flags |= SMB_MOUNT_GID;
+ 			break;
+ 		case 'f':
+ 			mnt->file_mode = (value & S_IRWXUGO) | S_IFREG;
++			flags |= SMB_MOUNT_FMODE;
+ 			break;
+ 		case 'd':
+ 			mnt->dir_mode = (value & S_IRWXUGO) | S_IFDIR;
++			flags |= SMB_MOUNT_DMODE;
+ 			break;
+ 		case 'i':
+ 			strlcpy(mnt->codepage.local_name, optarg, 
+@@ -429,9 +433,9 @@ smb_show_options(struct seq_file *s, str
+ 		if (mnt->flags & opts[i].flag)
+ 			seq_printf(s, ",%s", opts[i].name);
+ 
+-	if (mnt->uid != 0)
++	if (mnt->flags & SMB_MOUNT_UID)
+ 		seq_printf(s, ",uid=%d", mnt->uid);
+-	if (mnt->gid != 0)
++	if (mnt->flags & SMB_MOUNT_GID)
+ 		seq_printf(s, ",gid=%d", mnt->gid);
+ 	if (mnt->mounted_uid != 0)
+ 		seq_printf(s, ",mounted_uid=%d", mnt->mounted_uid);
+@@ -440,8 +444,10 @@ smb_show_options(struct seq_file *s, str
+ 	 * Defaults for file_mode and dir_mode are unknown to us; they
+ 	 * depend on the current umask of the user doing the mount.
+ 	 */
+-	seq_printf(s, ",file_mode=%04o", mnt->file_mode & S_IRWXUGO);
+-	seq_printf(s, ",dir_mode=%04o", mnt->dir_mode & S_IRWXUGO);
++	if (mnt->flags & SMB_MOUNT_FMODE)
++		seq_printf(s, ",file_mode=%04o", mnt->file_mode & S_IRWXUGO);
++	if (mnt->flags & SMB_MOUNT_DMODE)
++		seq_printf(s, ",dir_mode=%04o", mnt->dir_mode & S_IRWXUGO);
+ 
+ 	if (strcmp(mnt->codepage.local_name, CONFIG_NLS_DEFAULT))
+ 		seq_printf(s, ",iocharset=%s", mnt->codepage.local_name);
+@@ -599,6 +605,7 @@ int smb_fill_super(struct super_block *s
+ 	sb->s_root = d_alloc_root(root_inode);
+ 	if (!sb->s_root)
+ 		goto out_no_root;
++
+ 	smb_new_dentry(sb->s_root);
+ 
+ 	return 0;
+--- ./fs/smbfs/proc.c.org	2005-06-23 11:22:17.000000000 -0400
++++ ./fs/smbfs/proc.c	2005-06-27 09:00:38.355051656 -0400
+@@ -2074,7 +2074,8 @@ out:
+ 	return result;
+ }
+ 
+-void smb_decode_unix_basic(struct smb_fattr *fattr, char *p)
++void smb_decode_unix_basic(struct smb_fattr *fattr, struct smb_sb_info *server,
++			   char *p)
+ {
+ 	u64 size, disk_bytes;
+ 
+@@ -2111,8 +2112,17 @@ void smb_decode_unix_basic(struct smb_fa
+ 	fattr->f_ctime = smb_ntutc2unixutc(LVAL(p, 16));
+ 	fattr->f_atime = smb_ntutc2unixutc(LVAL(p, 24));
+ 	fattr->f_mtime = smb_ntutc2unixutc(LVAL(p, 32));
+-	fattr->f_uid = LVAL(p, 40); 
+-	fattr->f_gid = LVAL(p, 48); 
++
++	if (server->mnt->flags & SMB_MOUNT_UID)
++		fattr->f_uid = server->mnt->uid;
++	else
++		fattr->f_uid = LVAL(p, 40); 
++
++	if (server->mnt->flags & SMB_MOUNT_GID)
++		fattr->f_gid = server->mnt->gid;
++	else
++		fattr->f_gid = LVAL(p, 48); 
++
+ 	fattr->f_mode |= smb_filetype_to_mode(WVAL(p, 56));
+ 
+ 	if (S_ISBLK(fattr->f_mode) || S_ISCHR(fattr->f_mode)) {
+@@ -2124,7 +2134,15 @@ void smb_decode_unix_basic(struct smb_fa
+ 		    MINOR(fattr->f_rdev) != (minor & 0xffffffff))
+ 			fattr->f_rdev = 0;
+ 	}
++
+ 	fattr->f_mode |= LVAL(p, 84);
++	if ((server->mnt->flags & SMB_MOUNT_DMODE) && S_ISDIR(fattr->f_mode))
++		fattr->f_mode = server->mnt->dir_mode;
++	else if ((server->mnt->flags & SMB_MOUNT_FMODE) &&
++	    !S_ISDIR(fattr->f_mode)) {
++		fattr->f_mode = (server->mnt->file_mode & S_IRWXUGO) |
++				(fattr->f_mode & S_IFMT);
++	}
+ }
+ 
+ /*
+@@ -2210,7 +2228,7 @@ smb_decode_long_dirent(struct smb_sb_inf
+ 		/* FIXME: should we check the length?? */
+ 
+ 		p += 8;
+-		smb_decode_unix_basic(fattr, p);
++		smb_decode_unix_basic(fattr, server, p);
+ 		VERBOSE("info SMB_FIND_FILE_UNIX at %p, len=%d, name=%.*s\n",
+ 			p, len, len, qname->name);
+ 		break;
+@@ -2769,7 +2787,7 @@ smb_proc_getattr_unix(struct smb_sb_info
+ 	if (result < 0)
+ 		goto out_free;
+ 
+-	smb_decode_unix_basic(attr, req->rq_data);
++	smb_decode_unix_basic(attr, server, req->rq_data);
+ 
+ out_free:
+ 	smb_rput(req);
+--- ./fs/smbfs/proto.h.org	2004-10-18 17:54:37.000000000 -0400
++++ ./fs/smbfs/proto.h	2005-06-23 13:13:42.000000000 -0400
+@@ -24,7 +24,8 @@ extern int smb_proc_rmdir(struct dentry 
+ extern int smb_proc_unlink(struct dentry *dentry);
+ extern int smb_proc_flush(struct smb_sb_info *server, __u16 fileid);
+ extern void smb_init_root_dirent(struct smb_sb_info *server, struct smb_fattr *fattr);
+-extern void smb_decode_unix_basic(struct smb_fattr *fattr, char *p);
++extern void smb_decode_unix_basic(struct smb_fattr *fattr,
++	struct smb_sb_info *server, char *p);
+ extern int smb_proc_getattr(struct dentry *dir, struct smb_fattr *fattr);
+ extern int smb_proc_setattr(struct dentry *dir, struct smb_fattr *fattr);
+ extern int smb_proc_setattr_unix(struct dentry *d, struct iattr *attr, unsigned int major, unsigned int minor);

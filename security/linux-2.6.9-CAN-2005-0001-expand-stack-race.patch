@@ -1,0 +1,29 @@
+--- linux.vanilla-2.6.10/mm/mmap.c	2004-12-25 21:15:46.000000000 +0000
++++ linux-2.6.10/mm/mmap.c	2005-01-13 17:24:50.000000000 +0000
+@@ -1346,7 +1346,12 @@
+ 	address += 4 + PAGE_SIZE - 1;
+ 	address &= PAGE_MASK;
+ 	grow = (address - vma->vm_end) >> PAGE_SHIFT;
+-
++	
++	/* Someone beat us to it */
++	if (address <= vma->vm_end) {
++		anon_vma_unlock(vma);
++		return 0;
++	}
+ 	/* Overcommit.. */
+ 	if (security_vm_enough_memory(grow)) {
+ 		anon_vma_unlock(vma);
+@@ -1409,6 +1421,11 @@
+ 	address &= PAGE_MASK;
+ 	grow = (vma->vm_start - address) >> PAGE_SHIFT;
+ 
++	/* Someone beat us to it */
++	if (address >= vma->vm_start) {
++		anon_vma_unlock(vma);
++		return 0;
++	}
+ 	/* Overcommit.. */
+ 	if (security_vm_enough_memory(grow)) {
+
+

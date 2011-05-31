@@ -1,0 +1,163 @@
+diff -Nurp a/arch/ia64/hp/common/sba_iommu.c b/arch/ia64/hp/common/sba_iommu.c
+--- a/arch/ia64/hp/common/sba_iommu.c	2005-03-28 19:45:05.572423340 -0800
++++ b/arch/ia64/hp/common/sba_iommu.c	2005-03-28 19:47:58.732577469 -0800
+@@ -760,7 +760,7 @@ sba_io_pdir_entry(u64 *pdir_ptr, unsigne
+ #ifdef ENABLE_MARK_CLEAN
+ /**
+  * Since DMA is i-cache coherent, any (complete) pages that were written via
+- * DMA can be marked as "clean" so that update_mmu_cache() doesn't have to
++ * DMA can be marked as "clean" so that lazy_mmu_prot_update() doesn't have to
+  * flush them when they get mapped into an executable vm-area.
+  */
+ static void
+diff -Nurp a/arch/ia64/lib/swiotlb.c b/arch/ia64/lib/swiotlb.c
+--- a/arch/ia64/lib/swiotlb.c	2005-03-28 19:45:05.655431152 -0800
++++ b/arch/ia64/lib/swiotlb.c	2005-03-28 19:47:58.735507157 -0800
+@@ -391,7 +391,7 @@ swiotlb_map_single (struct device *hwdev
+ 
+ /*
+  * Since DMA is i-cache coherent, any (complete) pages that were written via
+- * DMA can be marked as "clean" so that update_mmu_cache() doesn't have to
++ * DMA can be marked as "clean" so that lazy_mmu_prot_update() doesn't have to
+  * flush them when they get mapped into an executable vm-area.
+  */
+ static void
+diff -Nurp a/arch/ia64/mm/init.c b/arch/ia64/mm/init.c
+--- a/arch/ia64/mm/init.c	2005-03-28 19:45:05.764806151 -0800
++++ b/arch/ia64/mm/init.c	2005-03-28 19:49:42.423005887 -0800
+@@ -76,7 +76,7 @@ check_pgt_cache (void)
+ }
+ 
+ void
+-update_mmu_cache (struct vm_area_struct *vma, unsigned long vaddr, pte_t pte)
++lazy_mmu_prot_update (pte_t pte)
+ {
+ 	unsigned long addr;
+ 	struct page *page;
+@@ -85,7 +85,6 @@ update_mmu_cache (struct vm_area_struct 
+ 		return;				/* not an executable page... */
+ 
+ 	page = pte_page(pte);
+-	/* don't use VADDR: it may not be mapped on this CPU (or may have just been flushed): */
+ 	addr = (unsigned long) page_address(page);
+ 
+ 	if (test_bit(PG_arch_1, &page->flags))
+diff -Nurp a/Documentation/cachetlb.txt b/Documentation/cachetlb.txt
+--- a/Documentation/cachetlb.txt	2005-03-28 19:44:51.742345385 -0800
++++ b/Documentation/cachetlb.txt	2005-03-28 19:50:29.236481876 -0800
+@@ -142,6 +142,10 @@ changes occur:
+ 	The ia64 sn2 platform is one example of a platform
+ 	that uses this interface.
+ 
++8) void lazy_mmu_prot_update(pte_t pte)
++	This interface is called whenever the protection on
++	any user PTEs change.  This interface provides a notification
++	to architecture specific code to take appropiate action.
+ 
+ Next, we have the cache flushing interfaces.  In general, when Linux
+ is changing an existing virtual-->physical mapping to a new value,
+diff -Nurp a/include/asm-generic/pgtable.h b/include/asm-generic/pgtable.h
+--- a/include/asm-generic/pgtable.h	2005-03-28 19:45:12.783360752 -0800
++++ b/include/asm-generic/pgtable.h	2005-03-28 19:47:58.717929032 -0800
+@@ -134,4 +134,7 @@ static inline void ptep_mkdirty(pte_t *p
+ #define pgd_offset_gate(mm, addr)	pgd_offset(mm, addr)
+ #endif
+ 
++#ifndef __HAVE_ARCH_LAZY_MMU_UPDATE
++#define lazy_mmu_prot_update(pte)		do { } while (0)
++#endif
+ #endif /* _ASM_GENERIC_PGTABLE_H */
+diff -Nurp a/include/asm-ia64/pgtable.h b/include/asm-ia64/pgtable.h
+--- a/include/asm-ia64/pgtable.h	2005-03-28 19:45:14.937657601 -0800
++++ b/include/asm-ia64/pgtable.h	2005-03-28 19:47:58.720858719 -0800
+@@ -419,6 +419,7 @@ pte_same (pte_t a, pte_t b)
+ {
+ 	return pte_val(a) == pte_val(b);
+ }
++#define update_mmu_cache(vma,address,pte) do { } while (0)
+ 
+ extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
+ extern void paging_init (void);
+@@ -479,7 +480,7 @@ extern void hugetlb_free_pgtables(struct
+  * information.  However, we use this routine to take care of any (delayed) i-cache
+  * flushing that may be necessary.
+  */
+-extern void update_mmu_cache (struct vm_area_struct *vma, unsigned long vaddr, pte_t pte);
++extern void lazy_mmu_prot_update (pte_t pte);
+ 
+ #define __HAVE_ARCH_PTEP_SET_ACCESS_FLAGS
+ /*
+@@ -558,6 +559,7 @@ do {											\
+ #define __HAVE_ARCH_PTEP_MKDIRTY
+ #define __HAVE_ARCH_PTE_SAME
+ #define __HAVE_ARCH_PGD_OFFSET_GATE
++#define __HAVE_ARCH_LAZY_MMU_UPDATE
+ #include <asm-generic/pgtable.h>
+ 
+ #endif /* _ASM_IA64_PGTABLE_H */
+diff -Nurp a/mm/memory.c b/mm/memory.c
+--- a/mm/memory.c	2005-03-28 19:44:51.898595383 -0800
++++ b/mm/memory.c	2005-03-28 19:53:14.132964231 -0800
+@@ -1109,6 +1109,7 @@ static inline void break_cow(struct vm_a
+ 			      vma);
+ 	ptep_establish(vma, address, page_table, entry);
+ 	update_mmu_cache(vma, address, entry);
++	lazy_mmu_prot_update(entry);
+ }
+ 
+ /*
+@@ -1161,6 +1162,7 @@ static int do_wp_page(struct mm_struct *
+ 					      vma);
+ 			ptep_set_access_flags(vma, address, page_table, entry, 1);
+ 			update_mmu_cache(vma, address, entry);
++			lazy_mmu_prot_update(entry);
+ 			pte_unmap(page_table);
+ 			spin_unlock(&mm->page_table_lock);
+ 			return VM_FAULT_MINOR;
+@@ -1494,6 +1496,7 @@ static int do_swap_page(struct mm_struct
+ 
+ 	/* No need to invalidate - it was non-present before */
+ 	update_mmu_cache(vma, address, pte);
++	lazy_mmu_prot_update(pte);
+ 	pte_unmap(page_table);
+ 	spin_unlock(&mm->page_table_lock);
+ out:
+@@ -1552,6 +1555,7 @@ do_anonymous_page(struct mm_struct *mm, 
+ 
+ 	/* No need to invalidate - it was non-present before */
+ 	update_mmu_cache(vma, addr, entry);
++	lazy_mmu_prot_update(entry);
+ 	spin_unlock(&mm->page_table_lock);
+ out:
+ 	return VM_FAULT_MINOR;
+@@ -1669,6 +1673,7 @@ retry:
+ 
+ 	/* no need to invalidate: a not-present page shouldn't be cached */
+ 	update_mmu_cache(vma, address, entry);
++	lazy_mmu_prot_update(entry);
+ 	spin_unlock(&mm->page_table_lock);
+ out:
+ 	return ret;
+@@ -1763,6 +1768,7 @@ static inline int handle_pte_fault(struc
+ 	entry = pte_mkyoung(entry);
+ 	ptep_set_access_flags(vma, address, pte, entry, write_access);
+ 	update_mmu_cache(vma, address, entry);
++	lazy_mmu_prot_update(entry);
+ 	pte_unmap(pte);
+ 	spin_unlock(&mm->page_table_lock);
+ 	return VM_FAULT_MINOR;
+diff -Nurp a/mm/mprotect.c b/mm/mprotect.c
+--- a/mm/mprotect.c	2005-03-28 19:44:52.276525066 -0800
++++ b/mm/mprotect.c	2005-03-28 19:47:58.736483719 -0800
+@@ -52,8 +52,9 @@ change_pte_range(pmd_t *pmd, unsigned lo
+ 			 * bits by wiping the pte and then setting the new pte
+ 			 * into place.
+ 			 */
+-			entry = ptep_get_and_clear(pte);
+-			set_pte(pte, pte_modify(entry, newprot));
++			entry = pte_modify(ptep_get_and_clear(pte), newprot);
++			set_pte(pte, entry);
++			lazy_mmu_prot_update(entry);
+ 		}
+ 		address += PAGE_SIZE;
+ 		pte++;

@@ -1,0 +1,18 @@
+--- linux-2.6.9/net/bridge/netfilter/ebtables.c	2004-10-18 17:53:46.000000000 -0400
++++ linux-2.6.9.fix/net/bridge/netfilter/ebtables.c	2005-10-12 12:20:30.000000000 -0400
+@@ -173,9 +173,10 @@ unsigned int ebt_do_table (unsigned int 
+ 	struct ebt_chainstack *cs;
+ 	struct ebt_entries *chaininfo;
+ 	char *base;
+-	struct ebt_table_info *private = table->private;
++	struct ebt_table_info *private;
+ 
+ 	read_lock_bh(&table->lock);
++	private = table->private;
+ 	cb_base = COUNTER_BASE(private->counters, private->nentries,
+ 	   smp_processor_id());
+ 	if (private->chainstack)
+
+
+
+

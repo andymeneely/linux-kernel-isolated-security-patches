@@ -1,0 +1,114 @@
+--- linux-2.6.9/fs/hfsplus/super.c.org
++++ linux-2.6.9/fs/hfsplus/super.c
+@@ -207,7 +207,9 @@ static void hfsplus_write_super(struct s
+ static void hfsplus_put_super(struct super_block *sb)
+ {
+ 	dprint(DBG_SUPER, "hfsplus_put_super\n");
+-	if (!(sb->s_flags & MS_RDONLY)) {
++	if (!sb->s_fs_info)
++		return;
++	if (!(sb->s_flags & MS_RDONLY) && HFSPLUS_SB(sb).s_vhdr) {
+ 		struct hfsplus_vh *vhdr = HFSPLUS_SB(sb).s_vhdr;
+ 
+ 		vhdr->modify_date = hfsp_now2mt();
+@@ -223,6 +225,8 @@ static void hfsplus_put_super(struct sup
+ 	iput(HFSPLUS_SB(sb).alloc_file);
+ 	iput(HFSPLUS_SB(sb).hidden_dir);
+ 	brelse(HFSPLUS_SB(sb).s_vhbh);
++	kfree(sb->s_fs_info);
++	sb->s_fs_info = NULL;
+ }
+ 
+ static int hfsplus_statfs(struct super_block *sb, struct kstatfs *buf)
+@@ -284,10 +288,9 @@ static int hfsplus_fill_super(struct sup
+ 	int err = -EINVAL;
+ 
+ 	sbi = kmalloc(sizeof(struct hfsplus_sb_info), GFP_KERNEL);
+-	if (!sbi) {
+-		err = -ENOMEM;
+-		goto out2;
+-	}
++	if (!sbi)
++		return -ENOMEM;
++
+ 	memset(sbi, 0, sizeof(HFSPLUS_SB(sb)));
+ 	sb->s_fs_info = sbi;
+ 	INIT_HLIST_HEAD(&sbi->rsrc_inodes);
+@@ -295,16 +298,14 @@ static int hfsplus_fill_super(struct sup
+ 	if (!parse_options(data, sbi)) {
+ 		if (!silent)
+ 			printk("HFS+-fs: unable to parse mount options\n");
+-		err = -EINVAL;
+-		goto out2;
++		goto cleanup;
+ 	}
+ 
+ 	/* Grab the volume header */
+ 	if (hfsplus_read_wrapper(sb)) {
+ 		if (!silent)
+ 			printk("HFS+-fs: unable to find HFS+ superblock\n");
+-		err = -EINVAL;
+-		goto out2;
++		goto cleanup;
+ 	}
+ 	vhdr = HFSPLUS_SB(sb).s_vhdr;
+ 
+@@ -416,7 +417,6 @@ out:
+ 
+ cleanup:
+ 	hfsplus_put_super(sb);
+-out2:
+ 	return err;
+ }
+ 
+--- linux-2.6.9/fs/hfs/mdb.c.org
++++ linux-2.6.9/fs/hfs/mdb.c
+@@ -333,6 +333,8 @@ void hfs_mdb_close(struct super_block *s
+  * Release the resources associated with the in-core MDB.  */
+ void hfs_mdb_put(struct super_block *sb)
+ {
++	if (!HFS_SB(sb))
++		return;
+ 	/* free the B-trees */
+ 	hfs_btree_close(HFS_SB(sb)->ext_tree);
+ 	hfs_btree_close(HFS_SB(sb)->cat_tree);
+@@ -340,4 +342,7 @@ void hfs_mdb_put(struct super_block *sb)
+ 	/* free the buffers holding the primary and alternate MDBs */
+ 	brelse(HFS_SB(sb)->mdb_bh);
+ 	brelse(HFS_SB(sb)->alt_mdb_bh);
++
++	kfree(HFS_SB(sb));
++	sb->s_fs_info = NULL;
+ }
+--- linux-2.6.9/fs/hfs/super.c.org
++++ linux-2.6.9/fs/hfs/super.c
+@@ -264,7 +264,7 @@ static int hfs_fill_super(struct super_b
+ 	res = -EINVAL;
+ 	if (!parse_options((char *)data, sbi)) {
+ 		hfs_warn("hfs_fs: unable to parse mount options.\n");
+-		goto bail3;
++		goto bail;
+ 	}
+ 
+ 	sb->s_op = &hfs_super_operations;
+@@ -277,7 +277,7 @@ static int hfs_fill_super(struct super_b
+ 			hfs_warn("VFS: Can't find a HFS filesystem on dev %s.\n",
+ 				hfs_mdb_name(sb));
+ 		res = -EINVAL;
+-		goto bail2;
++		goto bail;
+ 	}
+ 
+ 	/* try to get the root inode */
+@@ -307,10 +307,8 @@ bail_iput:
+ 	iput(root_inode);
+ bail_no_root:
+ 	hfs_warn("hfs_fs: get root inode failed.\n");
++bail:
+ 	hfs_mdb_put(sb);
+-bail2:
+-bail3:
+-	kfree(sbi);
+ 	return res;
+ }
+ 

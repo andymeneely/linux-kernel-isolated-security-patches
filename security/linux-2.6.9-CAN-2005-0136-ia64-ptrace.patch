@@ -1,0 +1,215 @@
+--- linux-2.6.9/arch/ia64/kernel/entry.S.orig	2005-04-18 10:00:21.860445540 -0400
++++ linux-2.6.9/arch/ia64/kernel/entry.S	2005-04-18 10:01:58.058751291 -0400
+@@ -51,8 +51,12 @@
+ 	 * setup a null register window frame.
+ 	 */
+ ENTRY(ia64_execve)
+-	.prologue ASM_UNW_PRLG_RP|ASM_UNW_PRLG_PFS, ASM_UNW_PRLG_GRSAVE(3)
+-	alloc loc1=ar.pfs,3,2,4,0
++	/*
++	 * Allocate 8 input registers since ptrace() may clobber them
++	 * and we can't allow ptrace to clobber kernel-state
++	 */
++	.prologue ASM_UNW_PRLG_RP|ASM_UNW_PRLG_PFS, ASM_UNW_PRLG_GRSAVE(8)
++	alloc loc1=ar.pfs,8,2,4,0
+ 	mov loc0=rp
+ 	.body
+ 	mov out0=in0			// filename
+@@ -113,8 +117,12 @@ END(ia64_execve)
+  *	      u64 tls)
+  */
+ GLOBAL_ENTRY(sys_clone2)
+-	.prologue ASM_UNW_PRLG_RP|ASM_UNW_PRLG_PFS, ASM_UNW_PRLG_GRSAVE(6)
+-	alloc r16=ar.pfs,6,2,6,0
++	/*
++	 * Allocate 8 input registers since ptrace() may clobber them
++	 * and we can't allow ptrace to clobber kernel-state
++	 */
++	.prologue ASM_UNW_PRLG_RP|ASM_UNW_PRLG_PFS, ASM_UNW_PRLG_GRSAVE(8)
++	alloc r16=ar.pfs,8,2,6,0
+ 	DO_SAVE_SWITCH_STACK
+ 	adds r2=PT(R16)+IA64_SWITCH_STACK_SIZE+16,sp
+ 	mov loc0=rp
+@@ -142,8 +150,12 @@ END(sys_clone2)
+  *	Deprecated.  Use sys_clone2() instead.
+  */
+ GLOBAL_ENTRY(sys_clone)
+-	.prologue ASM_UNW_PRLG_RP|ASM_UNW_PRLG_PFS, ASM_UNW_PRLG_GRSAVE(5)
+-	alloc r16=ar.pfs,5,2,6,0
++	/*
++	 * Allocate 8 input registers since ptrace() may clobber them
++	 * and we can't allow ptrace to clobber kernel-state
++	 */
++	.prologue ASM_UNW_PRLG_RP|ASM_UNW_PRLG_PFS, ASM_UNW_PRLG_GRSAVE(8)
++	alloc r16=ar.pfs,8,2,6,0
+ 	DO_SAVE_SWITCH_STACK
+ 	adds r2=PT(R16)+IA64_SWITCH_STACK_SIZE+16,sp
+ 	mov loc0=rp
+@@ -1183,7 +1195,11 @@ END(sys_rt_sigsuspend)
+ 
+ ENTRY(sys_rt_sigreturn)
+ 	PT_REGS_UNWIND_INFO(0)
+-	alloc r2=ar.pfs,0,0,1,0
++	/*
++	 * Allocate 8 input registers since ptrace() may clobber them
++	 * and we can't allow ptrace to clobber kernel-state
++	 */
++	alloc r2=ar.pfs,8,0,1,0
+ 	.prologue
+ 	PT_REGS_SAVES(16)
+ 	adds sp=-16,sp
+--- linux-2.6.9/arch/ia64/kernel/process.c.orig	2005-04-18 10:00:23.355263806 -0400
++++ linux-2.6.9/arch/ia64/kernel/process.c	2005-04-18 10:01:58.062750805 -0400
+@@ -616,7 +616,7 @@ dump_fpu (struct pt_regs *pt, elf_fpregs
+ 	return 1;	/* f0-f31 are always valid so we always return 1 */
+ }
+ 
+-asmlinkage long
++long
+ sys_execve (char __user *filename, char __user * __user *argv, char __user * __user *envp,
+ 	    struct pt_regs *regs)
+ {
+--- linux-2.6.9/arch/ia64/kernel/fsys.S.orig	2005-04-18 10:00:21.540484440 -0400
++++ linux-2.6.9/arch/ia64/kernel/fsys.S	2005-04-18 10:01:58.059751170 -0400
+@@ -615,7 +615,8 @@ GLOBAL_ENTRY(fsys_bubble_down)
+ 	;;
+ 	cmp.eq p8,p0=r3,r0
+ 
+-(p8)	br.call.sptk.many b6=b6			// ignore this return addr
++(p10)	br.cond.spnt.many ia64_ret_from_syscall	// p10==true means out registers are more than 8
++(p8)	br.call.sptk.many b6=b6		// ignore this return addr
+ 	br.cond.sptk ia64_trace_syscall
+ END(fsys_bubble_down)
+ 
+--- linux-2.6.9/arch/ia64/kernel/ivt.S.orig	2004-10-18 17:53:22.000000000 -0400
++++ linux-2.6.9/arch/ia64/kernel/ivt.S	2005-04-18 10:01:58.061750927 -0400
+@@ -51,6 +51,7 @@
+ #include <asm/system.h>
+ #include <asm/thread_info.h>
+ #include <asm/unistd.h>
++#include <asm/errno.h>
+ 
+ #if 1
+ # define PSR_DEFAULT_BITS	psr.ac
+@@ -732,10 +733,12 @@ ENTRY(break_fault)
+ 	ssm psr.ic | PSR_DEFAULT_BITS
+ 	;;
+ 	srlz.i					// guarantee that interruption collection is on
++	mov r3=NR_syscalls - 1
+ 	;;
+ (p15)	ssm psr.i				// restore psr.i
++	// p10==true means out registers are more than 8 or r15's Nat is true
++(p10)	br.cond.spnt.many ia64_ret_from_syscall
+ 	;;
+-	mov r3=NR_syscalls - 1
+ 	movl r16=sys_call_table
+ 
+ 	adds r15=-1024,r15			// r15 contains the syscall number---subtract 1024
+@@ -836,8 +839,11 @@ END(interrupt)
+ 	 * On exit:
+ 	 *	- executing on bank 1 registers
+ 	 *	- psr.ic enabled, interrupts restored
++	 *	-  p10: TRUE if syscall is invoked with more than 8 out
++	 *		registers or r15's Nat is true
+ 	 *	-  r1: kernel's gp
+ 	 *	-  r3: preserved (same as on entry)
++	 *	-  r8: -EINVAL if p10 is true
+ 	 *	- r12: points to kernel stack
+ 	 *	- r13: points to current task
+ 	 *	- p15: TRUE if interrupts need to be re-enabled
+@@ -860,12 +866,15 @@ GLOBAL_ENTRY(ia64_syscall_setup)
+ (pKStk)	mov r18=r0				// make sure r18 isn't NaT
+ 	;;
+ 
++	st8 [r16]=r0,PT(AR_PFS)-PT(CR_IFS)	// clear cr.ifs
+ 	st8 [r17]=r28,PT(AR_UNAT)-PT(CR_IIP)	// save cr.iip
++	extr.u r11=r19,7,7			// get sol of ar.pfs
++	and r8=0x7f,r19				// get sof of ar.pfs
+ 	mov r28=b0				// save b0 (2 cyc)
+ (p8)	mov in0=-1
+ 	;;
+ 
+-	st8 [r16]=r0,PT(AR_PFS)-PT(CR_IFS)	// clear cr.ifs
++	add r11=8,r11
+ 	st8 [r17]=r25,PT(AR_RSC)-PT(AR_UNAT)	// save ar.unat
+ (p9)	mov in1=-1
+ 	;;
+@@ -911,17 +920,18 @@ GLOBAL_ENTRY(ia64_syscall_setup)
+ 	adds r12=-16,r1		// switch to kernel memory stack (with 16 bytes of scratch)
+ (p14)	mov in6=-1
+ 
+-	mov r13=r2				// establish `current'
++	cmp.lt p10,p9=r11,r8			// frame size can't be more than local+8
+ 	movl r1=__gp				// establish kernel global pointer
+ 	;;
+ (p8)	mov in7=-1
+-	tnat.nz p9,p0=r15
++(p9)	tnat.nz p10,p0=r15
+ 
++	mov r13=r2				// establish `current'
+ 	cmp.eq pSys,pNonSys=r0,r0		// set pSys=1, pNonSys=0
+ 	movl r17=FPSR_DEFAULT
+ 	;;
+ 	mov.m ar.fpsr=r17			// set ar.fpsr to kernel default value
+-(p9)	mov r15=-1
++(p10)	mov r8=-EINVAL
+ 	br.ret.sptk.many b7
+ END(ia64_syscall_setup)
+ 
+--- linux-2.6.9/arch/ia64/kernel/gate.S.orig	2004-10-18 17:54:55.000000000 -0400
++++ linux-2.6.9/arch/ia64/kernel/gate.S	2005-04-18 10:01:58.060751048 -0400
+@@ -81,6 +81,7 @@ GLOBAL_ENTRY(__kernel_syscall_via_epc)
+ 	LOAD_FSYSCALL_TABLE(r14)
+ 
+ 	mov r16=IA64_KR(CURRENT)		// 12 cycle read latency
++	tnat.nz p10,p9=r15
+ 	mov r19=NR_syscalls-1
+ 	;;
+ 	shladd r18=r17,3,r14
+@@ -119,7 +120,8 @@ GLOBAL_ENTRY(__kernel_syscall_via_epc)
+ #endif
+ 
+ 	mov r10=-1
+-	mov r8=ENOSYS
++(p10)	mov r8=EINVAL
++(p9)	mov r8=ENOSYS
+ 	FSYS_RETURN
+ END(__kernel_syscall_via_epc)
+ 
+--- linux-2.6.9/include/asm-ia64/unistd.h.orig	2005-04-18 10:00:21.866444811 -0400
++++ linux-2.6.9/include/asm-ia64/unistd.h	2005-04-18 10:01:58.063750684 -0400
+@@ -370,7 +370,7 @@ asmlinkage unsigned long sys_mmap2(
+ 				int fd, long pgoff);
+ struct pt_regs;
+ struct sigaction;
+-asmlinkage long sys_execve(char __user *filename, char __user * __user *argv,
++long sys_execve(char __user *filename, char __user * __user *argv,
+ 			   char __user * __user *envp, struct pt_regs *regs);
+ asmlinkage long sys_pipe(long arg0, long arg1, long arg2, long arg3,
+ 			long arg4, long arg5, long arg6, long arg7, long stack);
+
+
+--- linux-2.6.9/include/asm-ia64/unistd.h.bak
++++ linux-2.6.9/include/asm-ia64/unistd.h
+@@ -370,7 +370,7 @@ asmlinkage unsigned long sys_mmap2(
+ 				int fd, long pgoff);
+ struct pt_regs;
+ struct sigaction;
+-long sys_execve(char __user *filename, char __user * __user *argv,
++asmlinkage long sys_execve(char __user *filename, char __user * __user *argv,
+ 			   char __user * __user *envp, struct pt_regs *regs);
+ asmlinkage long sys_pipe(long arg0, long arg1, long arg2, long arg3,
+ 			long arg4, long arg5, long arg6, long arg7, long stack);
+--- linux-2.6.9/arch/ia64/kernel/process.c.bak
++++ linux-2.6.9/arch/ia64/kernel/process.c
+@@ -616,7 +616,7 @@ dump_fpu (struct pt_regs *pt, elf_fpregs
+ 	return 1;	/* f0-f31 are always valid so we always return 1 */
+ }
+ 
+-long
++asmlinkage long
+ sys_execve (char __user *filename, char __user * __user *argv, char __user * __user *envp,
+ 	    struct pt_regs *regs)
+ {
+
+

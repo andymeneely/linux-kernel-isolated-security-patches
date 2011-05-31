@@ -1,0 +1,10 @@
+--- linux-2.6.9/security/keys/request_key_auth.c.orig	2005-10-17 17:07:16.000000000 +0100
++++ linux-2.6.9/security/keys/request_key_auth.c	2005-10-17 17:07:28.000000000 +0100
+@@ -96,6 +96,7 @@ static void request_key_auth_destroy(str
+ 	kenter("{%d}", key->serial);
+ 
+ 	key_put(rka->target_key);
++	kfree(rka);
+ 
+ } /* end request_key_auth_destroy() */
+ 

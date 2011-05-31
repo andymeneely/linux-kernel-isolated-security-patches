@@ -1,0 +1,12 @@
+--- 1/drivers/block/scsi_ioctl.c	2005-01-05 09:40:26 -0500
++++ 2/drivers/block/scsi_ioctl.c	2005-01-05 09:40:01 -0500
+@@ -339,7 +339,8 @@
+ 			 struct gendisk *bd_disk, Scsi_Ioctl_Command __user *sic)
+ {
+ 	struct request *rq;
+-	int err, in_len, out_len, bytes, opcode, cmdlen;
++	unsigned int in_len, out_len, bytes, opcode, cmdlen;
++	int err;
+ 	char *buffer = NULL, sense[SCSI_SENSE_BUFFERSIZE];
+ 
+ 	/*

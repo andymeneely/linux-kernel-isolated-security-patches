@@ -1,0 +1,61 @@
+--- linux-2.6.9/arch/s390/lib/uaccess.S.orig	2004-10-18 22:54:39.000000000 +0100
++++ linux-2.6.9/arch/s390/lib/uaccess.S	2006-03-07 13:49:49.000000000 +0000
+@@ -198,12 +198,12 @@ __strnlen_user_asm:
+ 0:	srst	%r2,%r1
+ 	jo	0b
+ 	sacf	0
+-	jh	1f		# \0 found in string ?
+ 	ahi	%r2,1		# strnlen_user result includes the \0
+-1:	slr	%r2,%r3
++				# or return count+1 if \0 not found
++	slr	%r2,%r3
+ 	br	%r14
+ 2:	sacf	0
+-	lhi	%r2,-EFAULT
++	slr     %r2,%r2		# return 0 on exception
+ 	br	%r14
+ 	.section __ex_table,"a"
+ 	.long	0b,2b
+--- linux-2.6.9/arch/s390/lib/uaccess64.S.orig	2004-10-18 22:54:55.000000000 +0100
++++ linux-2.6.9/arch/s390/lib/uaccess64.S	2006-03-07 13:49:49.000000000 +0000
+@@ -194,12 +194,12 @@ __strnlen_user_asm:
+ 0:	srst	%r2,%r1
+ 	jo	0b
+ 	sacf	0
+-	jh	1f		# \0 found in string ?
+ 	aghi	%r2,1		# strnlen_user result includes the \0
+-1:	slgr	%r2,%r3
++				# or return count+1 if \0 not found
++	slgr	%r2,%r3
+ 	br	%r14
+ 2:	sacf	0
+-	lghi	%r2,-EFAULT
++	slgr    %r2,%r2		# return 0 on exception
+ 	br	%r14
+ 	.section __ex_table,"a"
+ 	.quad	0b,2b
+--- linux-2.6.9/drivers/s390/char/keyboard.c.orig	2006-03-07 13:49:47.000000000 +0000
++++ linux-2.6.9/drivers/s390/char/keyboard.c	2006-03-07 13:55:24.000000000 +0000
+@@ -442,8 +442,11 @@ do_kdgkb_ioctl(struct kbd_data *kbd, str
+ 	case KDSKBSENT:
+ 		if (!perm)
+ 			return -EPERM;
+-		len = strnlen_user(u_kbs->kb_string,
+-				   sizeof(u_kbs->kb_string) - 1);
++		len = strnlen_user(u_kbs->kb_string, sizeof(u_kbs->kb_string));
++		if (!len)
++			return -EFAULT;
++		if (len > sizeof(u_kbs->kb_string))
++			return -EINVAL;
+ 		p = kmalloc(len, GFP_KERNEL);
+ 		if (!p)
+ 			return -ENOMEM;
+@@ -451,7 +454,7 @@ do_kdgkb_ioctl(struct kbd_data *kbd, str
+ 			kfree(p);
+ 			return -EFAULT;
+ 		}
+-		p[len] = 0;
++		p[len - 1] = 0;
+ 		if (kbd->func_table[kb_func])
+ 			kfree(kbd->func_table[kb_func]);
+ 		kbd->func_table[kb_func] = p;

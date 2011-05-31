@@ -1,0 +1,237 @@
+
+	[PATCH] Fix possible futex mmap_sem deadlock
+	
+	Some futex functions do get_user calls while holding mmap_sem for
+	reading.  If get_user() faults, and another thread happens to be in mmap
+	(or somewhere else holding waiting on down_write for the same
+	semaphore), then do_page_fault will deadlock.  Most architectures seem
+	to be exposed to this.
+	
+	To avoid it, make sure the page is available.  If not, release the
+	semaphore, fault it in and retry.
+	
+	I also found another exposure by inspection, moving some of the code
+	around avoids the possible deadlock there.
+	
+	Signed-off-by: Olof Johansson <olof@austin.ibm.com>
+	Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+
+
+
+ kernel/futex.c |   51 +++++++++++++++++++++++++++++++++++++++++++++------
+ mm/mempolicy.c |    8 ++++++--
+ 2 files changed, 51 insertions(+), 8 deletions(-)
+
+
+diff -Nru a/kernel/futex.c b/kernel/futex.c
+--- a/kernel/futex.c	2005-02-23 15:08:31 -08:00
++++ b/kernel/futex.c	2005-02-23 15:08:31 -08:00
+@@ -258,6 +258,18 @@
+ 	}
+ }
+ 
++static inline int get_futex_value_locked(int *dest, int __user *from)
++{
++	int ret;
++
++	inc_preempt_count();
++	ret = __copy_from_user_inatomic(dest, from, sizeof(int));
++	dec_preempt_count();
++	preempt_check_resched();
++
++	return ret ? -EFAULT : 0;
++}
++
+ /*
+  * The hash bucket lock must be held when this is called.
+  * Afterwards, the futex_q must not be accessed.
+@@ -329,6 +341,7 @@
+ 	int ret, drop_count = 0;
+ 	unsigned int nqueued;
+ 
++ retry:
+ 	down_read(&current->mm->mmap_sem);
+ 
+ 	ret = get_futex_key(uaddr1, &key1);
+@@ -355,9 +368,20 @@
+ 		   before *uaddr1.  */
+ 		smp_mb();
+ 
+-		if (get_user(curval, (int __user *)uaddr1) != 0) {
+-			ret = -EFAULT;
+-			goto out;
++		ret = get_futex_value_locked(&curval, (int __user *)uaddr1);
++
++		if (unlikely(ret)) {
++			/* If we would have faulted, release mmap_sem, fault
++			 * it in and start all over again.
++			 */
++			up_read(&current->mm->mmap_sem);
++
++			ret = get_user(curval, (int __user *)uaddr1);
++
++			if (!ret)
++				goto retry;
++
++			return ret;
+ 		}
+ 		if (curval != *valp) {
+ 			ret = -EAGAIN;
+@@ -480,6 +504,7 @@
+ 	int ret, curval;
+ 	struct futex_q q;
+ 
++ retry:
+ 	down_read(&current->mm->mmap_sem);
+ 
+ 	ret = get_futex_key(uaddr, &q.key);
+@@ -508,9 +533,23 @@
+ 	 * We hold the mmap semaphore, so the mapping cannot have changed
+ 	 * since we looked it up in get_futex_key.
+ 	 */
+-	if (get_user(curval, (int __user *)uaddr) != 0) {
+-		ret = -EFAULT;
+-		goto out_unqueue;
++
++	ret = get_futex_value_locked(&curval, (int __user *)uaddr);
++
++	if (unlikely(ret)) {
++		/* If we would have faulted, release mmap_sem, fault it in and
++		 * start all over again.
++		 */
++		up_read(&current->mm->mmap_sem);
++
++		if (!unqueue_me(&q)) /* There's a chance we got woken already */
++			return 0;
++
++		ret = get_user(curval, (int __user *)uaddr);
++
++		if (!ret)
++			goto retry;
++		return ret;
+ 	}
+ 	if (curval != val) {
+ 		ret = -EWOULDBLOCK;
+diff -Nru a/mm/mempolicy.c b/mm/mempolicy.c
+--- a/mm/mempolicy.c	2005-02-23 15:08:31 -08:00
++++ b/mm/mempolicy.c	2005-02-23 15:08:31 -08:00
+@@ -524,9 +524,13 @@
+ 	} else
+ 		pval = pol->policy;
+ 
+-	err = -EFAULT;
++	if (vma) {
++		up_read(&current->mm->mmap_sem);
++		vma = NULL;
++	}
++
+ 	if (policy && put_user(pval, policy))
+-		goto out;
++		return -EFAULT;
+ 
+ 	err = 0;
+ 	if (nmask) {
+
+
+--- linux-2.6.9/include/asm-ppc64/uaccess.h.orig	2004-10-18 22:54:29.000000000 +0100
++++ linux-2.6.9/include/asm-ppc64/uaccess.h	2005-03-11 12:06:53.121028445 +0000
+@@ -119,6 +119,7 @@ extern long __put_user_bad(void);
+ #define __put_user_nocheck(x,ptr,size)				\
+ ({								\
+ 	long __pu_err;						\
++	might_sleep();						\
+ 	__chk_user_ptr(ptr);					\
+ 	__put_user_size((x),(ptr),(size),__pu_err,-EFAULT);	\
+ 	__pu_err;						\
+@@ -128,6 +129,7 @@ extern long __put_user_bad(void);
+ ({									\
+ 	long __pu_err = -EFAULT;					\
+ 	void __user *__pu_addr = (ptr);					\
++	might_sleep();							\
+ 	if (access_ok(VERIFY_WRITE,__pu_addr,size))			\
+ 		__put_user_size((x),__pu_addr,(size),__pu_err,-EFAULT);	\
+ 	__pu_err;							\
+@@ -135,7 +137,6 @@ extern long __put_user_bad(void);
+ 
+ #define __put_user_size(x,ptr,size,retval,errret)			\
+ do {									\
+-	might_sleep();							\
+ 	retval = 0;							\
+ 	switch (size) {							\
+ 	  case 1: __put_user_asm(x,ptr,retval,"stb",errret); break;	\
+@@ -170,6 +171,7 @@ do {									\
+ #define __get_user_nocheck(x,ptr,size)				\
+ ({								\
+ 	long __gu_err, __gu_val;				\
++	might_sleep();						\
+ 	__get_user_size(__gu_val,(ptr),(size),__gu_err,-EFAULT);\
+ 	(x) = (__typeof__(*(ptr)))__gu_val;			\
+ 	__gu_err;						\
+@@ -179,6 +181,7 @@ do {									\
+ ({									\
+ 	long __gu_err = -EFAULT, __gu_val = 0;				\
+ 	const __typeof__(*(ptr)) __user *__gu_addr = (ptr);		\
++	might_sleep();							\
+ 	if (access_ok(VERIFY_READ,__gu_addr,size))			\
+ 		__get_user_size(__gu_val,__gu_addr,(size),__gu_err,-EFAULT);\
+ 	(x) = (__typeof__(*(ptr)))__gu_val;				\
+@@ -189,7 +192,6 @@ extern long __get_user_bad(void);
+ 
+ #define __get_user_size(x,ptr,size,retval,errret)			\
+ do {									\
+-	might_sleep();							\
+ 	retval = 0;							\
+ 	__chk_user_ptr(ptr);						\
+ 	switch (size) {							\
+@@ -223,9 +225,8 @@ extern unsigned long __copy_tofrom_user(
+ 					unsigned long size);
+ 
+ static inline unsigned long
+-__copy_from_user(void *to, const void __user *from, unsigned long n)
++__copy_from_user_inatomic(void *to, const void __user *from, unsigned long n)
+ {
+-	might_sleep();
+ 	if (__builtin_constant_p(n)) {
+ 		unsigned long ret;
+ 
+@@ -248,9 +249,15 @@ __copy_from_user(void *to, const void __
+ }
+ 
+ static inline unsigned long
+-__copy_to_user(void __user *to, const void *from, unsigned long n)
++__copy_from_user(void *to, const void __user *from, unsigned long n)
+ {
+ 	might_sleep();
++	return __copy_from_user_inatomic(to, from, n);
++}
++
++static inline unsigned long
++__copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
++{
+ 	if (__builtin_constant_p(n)) {
+ 		unsigned long ret;
+ 
+@@ -272,6 +279,13 @@ __copy_to_user(void __user *to, const vo
+ 	return __copy_tofrom_user(to, (const void __user *) from, n);
+ }
+ 
++static inline unsigned long
++__copy_to_user(void __user *to, const void *from, unsigned long n)
++{
++	might_sleep();
++	return __copy_to_user_inatomic(to, from, n);
++}
++
+ #define __copy_in_user(to, from, size) \
+ 	__copy_tofrom_user((to), (from), (size))
+ 
+@@ -284,9 +298,6 @@ extern unsigned long copy_in_user(void _
+ 
+ extern unsigned long __clear_user(void __user *addr, unsigned long size);
+ 
+-#define __copy_to_user_inatomic __copy_to_user
+-#define __copy_from_user_inatomic __copy_from_user
+-
+ static inline unsigned long
+ clear_user(void __user *addr, unsigned long size)
+ {

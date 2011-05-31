@@ -1,0 +1,63 @@
+diff -up -bB ./arch/x86_64/ia32/ia32entry.S.orig ./arch/x86_64/ia32/ia32entry.S
+--- ./arch/x86_64/ia32/ia32entry.S.orig	2007-09-24 12:25:31.000000000 +0200
++++ ./arch/x86_64/ia32/ia32entry.S	2007-09-24 12:25:02.000000000 +0200
+@@ -35,6 +35,18 @@
+ 	movq	%rax,R8(%rsp)
+ 	.endm
+ 
++	.macro LOAD_ARGS32 offset
++	movl \offset(%rsp),%r11d
++	movl \offset+8(%rsp),%r10d
++	movl \offset+16(%rsp),%r9d
++	movl \offset+24(%rsp),%r8d
++	movl \offset+40(%rsp),%ecx
++	movl \offset+48(%rsp),%edx
++	movl \offset+56(%rsp),%esi
++	movl \offset+64(%rsp),%edi
++	movl \offset+72(%rsp),%eax
++	.endm
++	
+ /*
+  * 32bit SYSENTER instruction entry.
+  *
+@@ -107,7 +119,7 @@ sysenter_tracesys:
+ 	movq	$-ENOSYS,RAX(%rsp)	/* really needed? */
+ 	movq	%rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call	syscall_trace_enter
+-	LOAD_ARGS ARGOFFSET  /* reload args from stack in case ptrace changed it */
++	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	movl	%ebp, %ebp
+ 	/* no need to do an access_ok check here because rbp has been
+@@ -188,7 +200,7 @@ cstar_tracesys:	
+ 	movq $-ENOSYS,RAX(%rsp)	/* really needed? */
+ 	movq %rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call syscall_trace_enter
+-	LOAD_ARGS ARGOFFSET  /* reload args from stack in case ptrace changed it */
++	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	movl RSP-ARGOFFSET(%rsp), %r8d
+ 	/* no need to do an access_ok check here because r8 has been
+@@ -252,7 +264,7 @@ ia32_tracesys:			 
+ 	movq $-ENOSYS,RAX(%rsp)	/* really needed? */
+ 	movq %rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call syscall_trace_enter
+-	LOAD_ARGS ARGOFFSET  /* reload args from stack in case ptrace changed it */
++	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	jmp ia32_do_syscall
+
+diff -up -bB ./arch/x86_64/kernel/ptrace.c.orig ./arch/x86_64/kernel/ptrace.c
+--- ./arch/x86_64/kernel/ptrace.c.orig	2007-09-24 12:32:59.000000000 +0200
++++ ./arch/x86_64/kernel/ptrace.c	2007-09-24 10:27:10.000000000 +0200
+@@ -98,10 +98,6 @@ static int putreg(struct task_struct *ch
+ {
+ 	unsigned long tmp; 
+ 	
+-	/* Some code in the 64bit emulation may not be 64bit clean.
+-	   Don't take any chances. */
+-	if (test_tsk_thread_flag(child, TIF_IA32))
+-		value &= 0xffffffff;
+ 	switch (regno) {
+ 		case offsetof(struct user_regs_struct,fs):
+ 			if (value && (value & 3) != 3)

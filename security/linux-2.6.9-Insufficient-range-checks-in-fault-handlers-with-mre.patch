@@ -1,0 +1,69 @@
+--- a/drivers/char/drm/drm_vm.h
++++ b/drivers/char/drm/drm_vm.h
+@@ -487,6 +487,7 @@ int DRM(mmap_dma)(struct file *filp, struct vm_area_struct *vma)
+ #else
+ 	vma->vm_flags |= VM_RESERVED; /* Don't swap */
+ #endif
++	vma->vm_flags |= VM_DONTEXPAND;
+ 
+ 	vma->vm_file  =	 filp;	/* Needed for drm_vm_open() */
+ 	DRM(vm_open)(vma);
+@@ -661,6 +662,7 @@ int DRM(mmap)(struct file *filp, struct vm_area_struct *vma)
+ 	vma->vm_flags |= VM_RESERVED; /* Don't swap */
+ #endif
+ 
++	vma->vm_flags |= VM_DONTEXPAND;
+ 	vma->vm_file  =	 filp;	/* Needed for drm_vm_open() */
+ 	DRM(vm_open)(vma);
+ 	return 0;
+--- a/fs/relayfs/buffers.c
++++ b/fs/relayfs/buffers.c
+@@ -79,6 +79,7 @@ int relay_mmap_buf(struct rchan_buf *buf, struct vm_area_struct *vma)
+ 		return -EINVAL;
+ 
+ 	vma->vm_ops = &relay_file_mmap_ops;
++	vma->vm_flags |= VM_DONTEXPAND;
+ 	vma->vm_private_data = buf;
+ 	buf->chan->cb->buf_mapped(buf, filp);
+ 
+--- a/sound/oss/via82cxxx_audio.c
++++ b/sound/oss/via82cxxx_audio.c
+@@ -2119,6 +2119,7 @@ static struct page * via_mm_nopage (struct vm_area_struct * vma,
+ {
+ 	struct via_info *card = vma->vm_private_data;
+ 	struct via_channel *chan = &card->ch_out;
++	unsigned long max_bufs;
+ 	struct page *dmapage;
+ 	unsigned long pgoff;
+ 	int rd, wr;
+@@ -2142,14 +2143,11 @@ static struct page * via_mm_nopage (struct vm_area_struct * vma,
+ 	rd = card->ch_in.is_mapped;
+ 	wr = card->ch_out.is_mapped;
+ 
+-#ifndef VIA_NDEBUG
+-	{
+-	unsigned long max_bufs = chan->frag_number;
+-	if (rd && wr) max_bufs *= 2;
+-	/* via_dsp_mmap() should ensure this */
+-	assert (pgoff < max_bufs);
+-	}
+-#endif
++	max_bufs = chan->frag_number;
++	if (rd && wr)
++		max_bufs *= 2;
++	if (pgoff >= max_bufs)
++		return NOPAGE_SIGBUS;
+ 
+ 	/* if full-duplex (read+write) and we have two sets of bufs,
+ 	 * then the playback buffers come first, sez soundcard.c */
+--- a/sound/usb/usx2y/usX2Yhwdep.c
++++ b/sound/usb/usx2y/usX2Yhwdep.c
+@@ -86,7 +86,7 @@ static int snd_us428ctls_mmap(snd_hwdep_t * hw, struct file *filp, struct vm_are
+ 		us428->us428ctls_sharedmem->CtlSnapShotLast = -2;
+ 	}
+ 	area->vm_ops = &us428ctls_vm_ops;
+-	area->vm_flags |= VM_RESERVED;
++	area->vm_flags |= VM_RESERVED | VM_DONTEXPAND;
+ 	area->vm_private_data = hw->private_data;
+ 	return 0;
+ }

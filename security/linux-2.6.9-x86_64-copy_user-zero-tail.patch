@@ -1,0 +1,52 @@
+diff --git a/arch/x86_64/lib/copy_user.S b/arch/x86_64/lib/copy_user.S
+index bd556c8..b097ba7 100644
+--- a/arch/x86_64/lib/copy_user.S
++++ b/arch/x86_64/lib/copy_user.S
+@@ -93,7 +93,7 @@ copy_user_generic:
+ 	.byte  5
+ 	.byte  5
+ 	.previous
+-.Lcug:	
++.Lcug:
+ 	pushq %rbx
+ 	xorl %eax,%eax		/*zero for the exception handler */
+ 
+@@ -275,20 +275,30 @@ copy_user_generic:
+   * eax uncopied bytes or 0 if successfull.
+   */			
+ copy_user_generic_c:
++	xorq %rax,%rax
+ 	movl %edx,%ecx
+ 	shrl $3,%ecx
+-	andl $7,%edx	
+-1:	rep 
++	andl $7,%edx
++.Lc1:	rep 
+ 	movsq 
+ 	movl %edx,%ecx
+-2:	rep
++.Lc2:	rep
+ 	movsb
+-4:	movl %ecx,%eax
+ 	ret
+-3:	lea (%rdx,%rcx,8),%rax
++
++.Lc1e:	movq %rcx,%rsi
++.Lc3:	rep
++	stosq
++.Lc2e:	movl %edx,%ecx
++.Lc4:	rep
++	stosb
++.Lc3e:	leaq (%rdx,%rsi,8),%rax
+ 	ret
+-	
++
+ 	.section __ex_table,"a"
+-	.quad 1b,3b
+-	.quad 2b,4b
++	.align 8
++	.quad .Lc1,.Lc1e
++	.quad .Lc2,.Lc2e
++	.quad .Lc3,.Lc3e
++	.quad .Lc4,.Lc3e
+ 	.previous

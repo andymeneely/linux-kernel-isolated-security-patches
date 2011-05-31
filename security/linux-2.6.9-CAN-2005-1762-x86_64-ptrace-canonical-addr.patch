@@ -1,0 +1,23 @@
+
+--- linux-2.6/arch/x86_64/kernel/ptrace.c
++++ linux-2.6/arch/x86_64/kernel/ptrace.c
+@@ -150,6 +150,18 @@ static int putreg(struct task_struct *ch
+ 				return -EIO;
+ 			value &= 0xffff;
+ 			break;
++		case offsetof(struct user_regs_struct,rip):
++			/*
++			 * If the %rip value is bogus (noncanonical), then
++			 * sysretq can take a #GP fault in kernel mode.  We
++			 * can't afford to let it, because that trap won't
++			 * switch stacks and so would try to run on the
++			 * user stack.  So just disallow directly setting
++			 * any value in danger of being noncanonical.
++			 */
++			if (value >= TASK_SIZE)
++				return -EIO;
++			break;
+ 	}
+ 	put_stack_long(child, regno - sizeof(struct pt_regs), value);
+ 	return 0;
+

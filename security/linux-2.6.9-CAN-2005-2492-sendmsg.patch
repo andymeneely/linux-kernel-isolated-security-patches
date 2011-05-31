@@ -1,0 +1,22 @@
+--- linux/net/ipv4/raw.c.orig	2005-08-26 06:02:29.000000000 -0400
++++ linux/net/ipv4/raw.c	2005-08-26 06:02:39.000000000 -0400
+@@ -355,7 +355,7 @@
+ 
+ 			if (type && code) {
+ 				get_user(fl->fl_icmp_type, type);
+-				__get_user(fl->fl_icmp_code, code);
++			        get_user(fl->fl_icmp_code, code);
+ 				probed = 1;
+ 			}
+ 			break;
+--- linux/net/ipv6/raw.c~	2004-10-18 17:53:51.000000000 -0400
++++ linux/net/ipv6/raw.c	2005-08-26 06:03:04.000000000 -0400
+@@ -588,7 +588,7 @@
+ 
+ 			if (type && code) {
+ 				get_user(fl->fl_icmp_type, type);
+-				__get_user(fl->fl_icmp_code, code);
++				get_user(fl->fl_icmp_code, code);
+ 				probed = 1;
+ 			}
+ 			break;

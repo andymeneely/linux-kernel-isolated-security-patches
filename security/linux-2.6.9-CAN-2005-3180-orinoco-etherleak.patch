@@ -1,0 +1,30 @@
+--- linux-2.6.9/drivers/net/wireless/orinoco.c.orig	2004-10-18 17:55:36.000000000 -0400
++++ linux-2.6.9/drivers/net/wireless/orinoco.c	2005-10-11 13:53:47.000000000 -0400
+@@ -797,9 +797,14 @@
+ 		return 0;
+ 	}
+ 
+-	/* Length of the packet body */
+-	/* FIXME: what if the skb is smaller than this? */
+-	len = max_t(int,skb->len - ETH_HLEN, ETH_ZLEN - ETH_HLEN);
++	/* Check packet length, pad short packets, round up odd length */
++	len = max_t(int, ALIGN(skb->len, 2), ETH_ZLEN);
++	if (skb->len < len) {
++		skb = skb_padto(skb, len);
++		if (skb == NULL)
++			goto fail;
++	}
++	len -= ETH_HLEN;
+ 
+ 	eh = (struct ethhdr *)skb->data;
+ 
+@@ -849,8 +854,7 @@
+ 		p = skb->data;
+ 	}
+ 
+-	/* Round up for odd length packets */
+-	err = hermes_bap_pwrite(hw, USER_BAP, p, ALIGN(data_len, 2),
++	err = hermes_bap_pwrite(hw, USER_BAP, p, data_len,
+ 				txfid, data_off);
+ 	if (err) {
+ 		printk(KERN_ERR "%s: Error %d writing packet to BAP\n",

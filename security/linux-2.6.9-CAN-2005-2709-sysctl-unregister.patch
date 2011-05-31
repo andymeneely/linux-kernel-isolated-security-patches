@@ -1,0 +1,292 @@
+--- linux-2.6.9/include/linux/proc_fs.h.bak	2005-10-18 14:18:31.000000000 -0400
++++ linux-2.6.9/include/linux/proc_fs.h	2005-10-18 14:19:17.000000000 -0400
+@@ -66,6 +66,9 @@ struct proc_dir_entry {
+ 	write_proc_t *write_proc;
+ 	atomic_t count;		/* use count */
+ 	int deleted;		/* delete flag */
++#ifndef __GENKSYMS__
++	void *set;
++#endif
+ };
+ 
+ struct kcore_list {
+--- linux-2.6.9/include/linux/sysctl.h.bak	2005-10-18 14:18:31.000000000 -0400
++++ linux-2.6.9/include/linux/sysctl.h	2005-10-18 14:19:41.000000000 -0400
+@@ -24,6 +24,7 @@
+ #include <linux/compiler.h>
+ 
+ struct file;
++struct completion;
+ 
+ #define CTL_MAXNAME 10		/* how many path components do we allow in a
+ 				   call to sysctl?   In other words, what is
+@@ -923,6 +924,10 @@ struct ctl_table_header
+ {
+ 	ctl_table *ctl_table;
+ 	struct list_head ctl_entry;
++#ifndef __GENKSYMS__
++	int used;
++	struct completion *unregistering;
++#endif
+ };
+ 
+ struct ctl_table_header * register_sysctl_table(ctl_table * table, 
+--- linux-2.6.9/arch/s390/appldata/appldata_base.c.bak	2005-10-18 14:18:30.000000000 -0400
++++ linux-2.6.9/arch/s390/appldata/appldata_base.c	2005-10-18 14:18:34.000000000 -0400
+@@ -583,12 +583,15 @@ int appldata_register_ops(struct appldat
+  */
+ void appldata_unregister_ops(struct appldata_ops *ops)
+ {
++	void *table;
+ 	spin_lock(&appldata_ops_lock);
+-	unregister_sysctl_table(ops->sysctl_header);
+ 	list_del(&ops->list);
+-	kfree(ops->ctl_table);
++	/* at that point any incoming access will fail */
++	table = ops->ctl_table;
+ 	ops->ctl_table = NULL;
+ 	spin_unlock(&appldata_ops_lock);
++	unregister_sysctl_table(ops->sysctl_header);
++	kfree(table);
+ 	P_INFO("%s-ops unregistered!\n", ops->name);
+ }
+ /********************** module-ops management <END> **************************/
+--- linux-2.6.9/kernel/sysctl.c.bak	2005-10-18 14:18:31.000000000 -0400
++++ linux-2.6.9/kernel/sysctl.c	2005-10-18 14:18:34.000000000 -0400
+@@ -188,7 +188,7 @@ struct file_operations proc_sys_file_ope
+ 
+ extern struct proc_dir_entry *proc_sys_root;
+ 
+-static void register_proc_table(ctl_table *, struct proc_dir_entry *);
++static void register_proc_table(ctl_table *, struct proc_dir_entry *, void *);
+ static void unregister_proc_table(ctl_table *, struct proc_dir_entry *);
+ #endif
+ 
+@@ -989,10 +989,52 @@ static ctl_table dev_table[] = {
+ 
+ extern void init_irq_proc (void);
+ 
++static spinlock_t sysctl_lock = SPIN_LOCK_UNLOCKED;
++
++/* called under sysctl_lock */
++static int use_table(struct ctl_table_header *p)
++{
++	if (unlikely(p->unregistering))
++		return 0;
++	p->used++;
++	return 1;
++}
++
++/* called under sysctl_lock */
++static void unuse_table(struct ctl_table_header *p)
++{
++	if (!--p->used)
++		if (unlikely(p->unregistering))
++			complete(p->unregistering);
++}
++
++/* called under sysctl_lock, will reacquire if has to wait */
++static void start_unregistering(struct ctl_table_header *p)
++{
++	struct completion wait;
++
++	init_completion(&wait);
++	p->unregistering = &wait;
++	/*
++	 * if p->used is 0, nobody will ever dereference ->unregistering,
++	 * so leaving it dangling is OK; we just need non-NULL.
++	 */
++	if (unlikely(p->used)) {
++		spin_unlock(&sysctl_lock);
++		wait_for_completion(&wait);
++		spin_lock(&sysctl_lock);
++	}
++	/*
++	 * do not remove from the list until nobody holds it; walking the
++	 * list in do_sysctl() relies on that.
++	 */
++	list_del_init(&p->ctl_entry);
++}
++
+ void __init sysctl_init(void)
+ {
+ #ifdef CONFIG_PROC_FS
+-	register_proc_table(root_table, proc_sys_root);
++	register_proc_table(root_table, proc_sys_root, &root_table_header);
+ 	init_irq_proc();
+ #endif
+ }
+@@ -1001,6 +1043,7 @@ int do_sysctl(int __user *name, int nlen
+ 	       void __user *newval, size_t newlen)
+ {
+ 	struct list_head *tmp;
++	int error = -ENOTDIR;
+ 
+ 	if (nlen <= 0 || nlen >= CTL_MAXNAME)
+ 		return -ENOTDIR;
+@@ -1009,21 +1052,31 @@ int do_sysctl(int __user *name, int nlen
+ 		if (!oldlenp || get_user(old_len, oldlenp))
+ 			return -EFAULT;
+ 	}
++	spin_lock(&sysctl_lock);
+ 	tmp = &root_table_header.ctl_entry;
+ 	do {
+ 		struct ctl_table_header *head =
+ 			list_entry(tmp, struct ctl_table_header, ctl_entry);
+ 		void *context = NULL;
+-		int error = parse_table(name, nlen, oldval, oldlenp, 
++
++		if (!use_table(head))
++			continue;
++
++		spin_unlock(&sysctl_lock);
++
++		error = parse_table(name, nlen, oldval, oldlenp, 
+ 					newval, newlen, head->ctl_table,
+ 					&context);
+ 		if (context)
+ 			kfree(context);
++
++		spin_lock(&sysctl_lock);
++		unuse_table(head);
+ 		if (error != -ENOTDIR)
+-			return error;
+-		tmp = tmp->next;
+-	} while (tmp != &root_table_header.ctl_entry);
+-	return -ENOTDIR;
++			break;
++	} while ((tmp = tmp->next) != &root_table_header.ctl_entry);
++	spin_unlock(&sysctl_lock);
++	return error;
+ }
+ 
+ asmlinkage long sys_sysctl(struct __sysctl_args __user *args)
+@@ -1234,12 +1287,16 @@ struct ctl_table_header *register_sysctl
+ 		return NULL;
+ 	tmp->ctl_table = table;
+ 	INIT_LIST_HEAD(&tmp->ctl_entry);
++	tmp->used = 0;
++	tmp->unregistering = NULL;
++	spin_lock(&sysctl_lock);
+ 	if (insert_at_head)
+ 		list_add(&tmp->ctl_entry, &root_table_header.ctl_entry);
+ 	else
+ 		list_add_tail(&tmp->ctl_entry, &root_table_header.ctl_entry);
++	spin_unlock(&sysctl_lock);
+ #ifdef CONFIG_PROC_FS
+-	register_proc_table(table, proc_sys_root);
++	register_proc_table(table, proc_sys_root, tmp);
+ #endif
+ 	return tmp;
+ }
+@@ -1253,10 +1310,13 @@ struct ctl_table_header *register_sysctl
+  */
+ void unregister_sysctl_table(struct ctl_table_header * header)
+ {
+-	list_del(&header->ctl_entry);
++	might_sleep();
++	spin_lock(&sysctl_lock);
++	start_unregistering(header);
+ #ifdef CONFIG_PROC_FS
+ 	unregister_proc_table(header->ctl_table, proc_sys_root);
+ #endif
++	spin_unlock(&sysctl_lock);
+ 	kfree(header);
+ }
+ 
+@@ -1267,7 +1327,7 @@ void unregister_sysctl_table(struct ctl_
+ #ifdef CONFIG_PROC_FS
+ 
+ /* Scan the sysctl entries in table and add them all into /proc */
+-static void register_proc_table(ctl_table * table, struct proc_dir_entry *root)
++static void register_proc_table(ctl_table * table, struct proc_dir_entry *root, void *set)
+ {
+ 	struct proc_dir_entry *de;
+ 	int len;
+@@ -1303,13 +1363,14 @@ static void register_proc_table(ctl_tabl
+ 			de = create_proc_entry(table->procname, mode, root);
+ 			if (!de)
+ 				continue;
++			de->set = set;
+ 			de->data = (void *) table;
+ 			if (table->proc_handler)
+ 				de->proc_fops = &proc_sys_file_operations;
+ 		}
+ 		table->de = de;
+ 		if (de->mode & S_IFDIR)
+-			register_proc_table(table->child, de);
++			register_proc_table(table->child, de, set);
+ 	}
+ }
+ 
+@@ -1334,6 +1395,13 @@ static void unregister_proc_table(ctl_ta
+ 				continue;
+ 		}
+ 
++		/*
++		 * In any case, mark the entry as goner; we'll keep it
++		 * around if it's busy, but we'll know to do nothing with
++		 * its fields.  We are under sysctl_lock here.
++		 */
++		de->data = NULL;
++
+ 		/* Don't unregister proc entries that are still being used.. */
+ 		if (atomic_read(&de->count))
+ 			continue;
+@@ -1347,27 +1415,38 @@ static ssize_t do_rw_proc(int write, str
+ 			  size_t count, loff_t *ppos)
+ {
+ 	int op;
+-	struct proc_dir_entry *de;
++	struct proc_dir_entry *de = PDE(file->f_dentry->d_inode);
+ 	struct ctl_table *table;
+ 	size_t res;
+-	ssize_t error;
+-	
+-	de = PDE(file->f_dentry->d_inode);
+-	if (!de || !de->data)
+-		return -ENOTDIR;
+-	table = (struct ctl_table *) de->data;
+-	if (!table || !table->proc_handler)
+-		return -ENOTDIR;
+-	op = (write ? 002 : 004);
+-	if (ctl_perm(table, op))
+-		return -EPERM;
++	ssize_t error = -ENOTDIR;
+ 	
+-	res = count;
+-
+-	error = (*table->proc_handler) (table, write, file, buf, &res, ppos);
+-	if (error)
+-		return error;
+-	return res;
++	spin_lock(&sysctl_lock);
++	if (de && de->data && use_table(de->set)) {
++		/*
++		 * at that point we know that sysctl was not unregistered
++		 * and won't be until we finish
++		 */
++		spin_unlock(&sysctl_lock);
++		table = (struct ctl_table *) de->data;
++		if (!table || !table->proc_handler)
++			goto out;
++		error = -EPERM;
++		op = (write ? 002 : 004);
++		if (ctl_perm(table, op))
++			goto out;
++		
++		/* careful: calling conventions are nasty here */
++		res = count;
++		error = (*table->proc_handler)(table, write, file,
++						buf, &res, ppos);
++		if (!error)
++			error = res;
++	out:
++		spin_lock(&sysctl_lock);
++		unuse_table(de->set);
++	}
++	spin_unlock(&sysctl_lock);
++	return error;
+ }
+ 
+ static int proc_opensys(struct inode *inode, struct file *file)

@@ -1,0 +1,378 @@
+--- linux-2.6.9-42.EL.orig/arch/x86_64/ia32/ia32_binfmt.c
++++ linux-2.6.9-42.EL/arch/x86_64/ia32/ia32_binfmt.c
+@@ -306,6 +306,10 @@ MODULE_AUTHOR("Eric Youngdale, Andi Klee
+ 
+ static void elf32_init(struct pt_regs *);
+ 
++#define ARCH_HAS_SETUP_ADDITIONAL_PAGES 1
++#define arch_setup_additional_pages syscall32_setup_pages
++extern int syscall32_setup_pages(struct linux_binprm *, int exstack);
++
+ #include "../../../fs/binfmt_elf.c" 
+ 
+ static void elf32_init(struct pt_regs *regs)
+--- linux-2.6.9-42.EL.orig/arch/x86_64/ia32/syscall32.c
++++ linux-2.6.9-42.EL/arch/x86_64/ia32/syscall32.c
+@@ -9,6 +9,7 @@
+ #include <linux/gfp.h>
+ #include <linux/init.h>
+ #include <linux/stringify.h>
++#include <linux/security.h>
+ #include <asm/proto.h>
+ #include <asm/tlbflush.h>
+ #include <asm/ia32_unistd.h>
+@@ -30,44 +31,62 @@ extern int sysctl_vsyscall32;
+ char *syscall32_page; 
+ static int use_sysenter __initdata = -1;
+ 
+-/*
+- * Map the 32bit vsyscall page on demand.
+- *
+- * RED-PEN: This knows too much about high level VM.
+- *
+- * Alternative would be to generate a vma with appropriate backing options
+- * and let it be handled by generic VM.
+- */
+-int __map_syscall32(struct mm_struct *mm, unsigned long address)
+-{ 
+-	pte_t *pte;
+-	pmd_t *pmd;
+-	int err = 0;
+-
+-	spin_lock(&mm->page_table_lock); 
+-	pmd = pmd_alloc(mm, pgd_offset(mm, address), address); 
+-	if (pmd && (pte = pte_alloc_map(mm, pmd, address)) != NULL) { 
+-		if (pte_none(*pte)) { 
+-			set_pte(pte, 
+-				mk_pte(virt_to_page(syscall32_page), 
+-				       PAGE_KERNEL_VSYSCALL32)); 
+-		}
+-		/* Flush only the local CPU. Other CPUs taking a fault
+-		   will just end up here again */
+-		__flush_tlb_one(address); 
+-	} else
+-		err = -ENOMEM; 
+-	spin_unlock(&mm->page_table_lock);
+-	return err;
++static struct page *
++syscall32_nopage(struct vm_area_struct *vma, unsigned long adr, int *type)
++{
++	struct page *p = virt_to_page(adr - vma->vm_start + syscall32_page);
++	get_page(p);
++	return p;
++}
++
++/* Prevent VMA merging */
++static void syscall32_vma_close(struct vm_area_struct *vma)
++{
+ }
+ 
+-int map_syscall32(struct mm_struct *mm, unsigned long address)
++static struct vm_operations_struct syscall32_vm_ops = {
++	.close = syscall32_vma_close,
++	.nopage = syscall32_nopage,
++};
++
++struct linux_binprm;
++
++/* Setup a VMA at program startup for the vsyscall page */
++int syscall32_setup_pages(struct linux_binprm *bprm, int exstack)
+ {
+-	int err;
+-	down_read(&mm->mmap_sem);
+-	err = __map_syscall32(mm, address);
+-	up_read(&mm->mmap_sem);
+-	return err;
++	int npages = (VSYSCALL32_END - VSYSCALL32_BASE) >> PAGE_SHIFT;
++	struct vm_area_struct *vma;
++	struct mm_struct *mm = current->mm;
++	int ret;
++
++	vma = kmem_cache_alloc(vm_area_cachep, SLAB_KERNEL);
++	if (!vma)
++		return -ENOMEM;
++	if (security_vm_enough_memory(npages)) {
++		kmem_cache_free(vm_area_cachep, vma);
++		return -ENOMEM;
++	}
++
++	memset(vma, 0, sizeof(struct vm_area_struct));
++	/* Could randomize here */
++	vma->vm_start = VSYSCALL32_BASE;
++	vma->vm_end = VSYSCALL32_END;
++	/* MAYWRITE to allow gdb to COW and set breakpoints */
++	vma->vm_flags = VM_READ|VM_EXEC|VM_MAYREAD|VM_MAYEXEC|VM_MAYWRITE;
++	vma->vm_flags |= mm->def_flags;
++	vma->vm_page_prot = protection_map[vma->vm_flags & 7];
++	vma->vm_ops = &syscall32_vm_ops;
++	vma->vm_mm = mm;
++
++	down_write(&mm->mmap_sem);
++	if ((ret = insert_vm_struct(mm, vma))) {
++		up_write(&mm->mmap_sem);
++		kmem_cache_free(vm_area_cachep, vma);
++		return ret;
++	}
++	mm->total_vm += npages;
++	up_write(&mm->mmap_sem);
++	return 0;
+ }
+ 
+ static int __init init_syscall32(void)
+--- linux-2.6.9-42.EL.orig/arch/x86_64/mm/fault.c
++++ linux-2.6.9-42.EL/arch/x86_64/mm/fault.c
+@@ -408,17 +408,6 @@ bad_area:
+ 	up_read(&mm->mmap_sem);
+ 
+ bad_area_nosemaphore:
+-
+-#ifdef CONFIG_IA32_EMULATION
+-	/* 32bit vsyscall. map on demand. */
+-	if (test_thread_flag(TIF_IA32) && ((error_code & 0x1) == 0) &&
+-	    address >= VSYSCALL32_BASE && address < VSYSCALL32_END) {
+-		if (map_syscall32(mm, address) < 0)
+-			goto out_of_memory2;
+-		return;
+-	}
+-#endif
+-
+ 	/* User mode accesses just cause a SIGSEGV */
+ 	if (error_code & 4) {
+ 		if (is_prefetch(regs, address, error_code))
+@@ -500,7 +489,6 @@ no_context:
+  */
+ out_of_memory:
+ 	up_read(&mm->mmap_sem);
+-out_of_memory2:
+ 	if (current->pid == 1) { 
+ 		yield();
+ 		goto again;
+--- linux-2.6.9-42.EL.orig/arch/x86_64/mm/init.c
++++ linux-2.6.9-42.EL/arch/x86_64/mm/init.c
+@@ -644,9 +644,9 @@ static __init int x8664_sysctl_init(void
+ __initcall(x8664_sysctl_init);
+ #endif
+ 
+-/* Pseudo VMAs to allow ptrace access for the vsyscall pages.  x86-64 has two
+-   different ones: one for 32bit and one for 64bit. Use the appropiate
+-   for the target task. */
++/* A pseudo VMAs to allow ptrace access for the vsyscall page.   This only
++   covers the 64bit vsyscall page now. 32bit has a real VMA now and does
++   not need special handling anymore. */
+ 
+ static struct vm_area_struct gate_vma = {
+ 	.vm_start = VSYSCALL_START,
+@@ -654,22 +654,11 @@ static struct vm_area_struct gate_vma = 
+ 	.vm_page_prot = PAGE_READONLY
+ };
+ 
+-static struct vm_area_struct gate32_vma = {
+-	.vm_start = VSYSCALL32_BASE,
+-	.vm_end = VSYSCALL32_END,
+-	.vm_page_prot = PAGE_READONLY
+-};
+-
+ struct vm_area_struct *get_gate_vma(struct task_struct *tsk)
+ {
+ #ifdef CONFIG_IA32_EMULATION
+-	if (test_tsk_thread_flag(tsk, TIF_IA32)) {
+-		/* lookup code assumes the pages are present. set them up
+-		   now */
+-		if (__map_syscall32(tsk->mm, VSYSCALL32_BASE) < 0)
+-			return NULL;
+-		return &gate32_vma;
+-	}
++	if (test_tsk_thread_flag(tsk, TIF_IA32))
++		return NULL;
+ #endif
+ 	return &gate_vma;
+ }
+@@ -677,6 +666,8 @@ struct vm_area_struct *get_gate_vma(stru
+ int in_gate_area(struct task_struct *task, unsigned long addr)
+ {
+ 	struct vm_area_struct *vma = get_gate_vma(task);
++	if (!vma)
++		return 0;
+ 	return (addr >= vma->vm_start) && (addr < vma->vm_end);
+ }
+ 
+--- linux-2.6.9-42.EL.orig/include/asm-x86_64/proto.h
++++ linux-2.6.9-42.EL/include/asm-x86_64/proto.h
+@@ -74,8 +74,6 @@ extern void __die(const char * str, stru
+ extern void __show_regs(struct pt_regs * regs);
+ extern void show_regs(struct pt_regs * regs);
+ 
+-extern int map_syscall32(struct mm_struct *mm, unsigned long address);
+-extern int __map_syscall32(struct mm_struct *mm, unsigned long address);
+ extern char *syscall32_page;
+ extern void syscall32_cpu_init(void);
+ 
+--- linux-2.6.9-42.EL.orig/fs/binfmt_elf.c
++++ linux-2.6.9-42.EL/fs/binfmt_elf.c
+@@ -969,6 +969,13 @@ static int load_elf_binary(struct linux_
+ #ifdef __HAVE_ARCH_VSYSCALL
+ 	map_vsyscall();
+ #endif
++#ifdef ARCH_HAS_SETUP_ADDITIONAL_PAGES
++        retval = arch_setup_additional_pages(bprm, executable_stack);
++        if (retval < 0) {
++                send_sig(SIGKILL, current, 0);
++                goto out;
++        }
++#endif /* ARCH_HAS_SETUP_ADDITIONAL_PAGES */
+ 
+ 	compute_creds(bprm);
+ 	current->flags &= ~PF_FORKNOEXEC;
+--- linux-2.6.9-42.EL.orig/include/linux/proc_fs.h
++++ linux-2.6.9-42.EL/include/linux/proc_fs.h
+@@ -266,4 +266,9 @@ static inline struct proc_dir_entry *PDE
+ 	return PROC_I(inode)->pde;
+ }
+ 
++struct proc_maps_private {
++	struct task_struct *task;
++	struct vm_area_struct *tail_vma;
++};
++
+ #endif /* _LINUX_PROC_FS_H */
+--- linux-2.6.9-42.EL.orig/fs/proc/base.c
++++ linux-2.6.9-42.EL/fs/proc/base.c
+@@ -494,11 +494,20 @@ static int proc_permission(struct inode 
+ extern struct seq_operations proc_pid_maps_op;
+ static int maps_open(struct inode *inode, struct file *file)
+ {
++	struct proc_maps_private *priv;
+ 	struct task_struct *task = proc_task(inode);
+-	int ret = seq_open(file, &proc_pid_maps_op);
+-	if (!ret) {
+-		struct seq_file *m = file->private_data;
+-		m->private = task;
++	int ret = -ENOMEM;
++
++	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
++	if (priv) {
++		ret = seq_open(file, &proc_pid_maps_op);
++		if (!ret) {
++			struct seq_file *m = file->private_data;
++			priv->task = task;
++			m->private = priv;
++		} else {
++			kfree(priv);
++		}
+ 	}
+ 	return ret;
+ }
+@@ -507,7 +516,7 @@ static struct file_operations proc_maps_
+ 	.open		= maps_open,
+ 	.read		= seq_read,
+ 	.llseek		= seq_lseek,
+-	.release	= seq_release,
++	.release	= seq_release_private,
+ };
+ 
+ extern struct seq_operations mounts_op;
+--- linux-2.6.9/fs/proc/task_mmu.c
++++ linux-2.6.9/fs/proc/task_mmu.c
+@@ -98,31 +98,46 @@ static int show_map(struct seq_file *m, 
+ 
+ static void *m_start(struct seq_file *m, loff_t *pos)
+ {
+-	struct task_struct *task = m->private;
+-	struct mm_struct *mm = mm_for_maps(task);
+-	struct vm_area_struct * map;
++	struct proc_maps_private *priv = m->private;
++	struct task_struct *task = priv->task;
++	struct mm_struct *mm;
++	struct vm_area_struct * map, *tail_vma = NULL;
+ 	loff_t l = *pos;
+ 
++	priv->tail_vma = NULL;
++
++	mm = mm_for_maps(task);
+ 	if (!mm)
+ 		return NULL;
+ 
+-	map = mm->mmap;
+-	while (l-- && map)
+-		map = map->vm_next;
+-	if (!map) {
+-		up_read(&mm->mmap_sem);
+-		mmput(mm);
+-		if (l == -1)
+-			map = get_gate_vma(task);
++	priv->tail_vma = tail_vma = get_gate_vma(priv->task);
++
++	map = NULL;
++	if ((unsigned long)l < mm->map_count) {
++		map = mm->mmap;
++		while (l-- && map)
++			map = map->vm_next;
++		goto out;
+ 	}
+-	return map;
++
++	if (l != mm->map_count)
++		tail_vma = NULL;
++
++out:
++	if (map)
++		return map;
++
++	up_read(&mm->mmap_sem);
++	mmput(mm);
++	return tail_vma;
+ }
+ 
+ static void m_stop(struct seq_file *m, void *v)
+ {
+-	struct task_struct *task = m->private;
++	struct proc_maps_private *priv = m->private;
+ 	struct vm_area_struct *map = v;
+-	if (map && map != get_gate_vma(task)) {
++
++	if (map && map != priv->tail_vma) {
+ 		struct mm_struct *mm = map->vm_mm;
+ 		up_read(&mm->mmap_sem);
+ 		mmput(mm);
+@@ -131,15 +146,15 @@ static void m_stop(struct seq_file *m, v
+ 
+ static void *m_next(struct seq_file *m, void *v, loff_t *pos)
+ {
+-	struct task_struct *task = m->private;
++	struct proc_maps_private *priv = m->private;
+ 	struct vm_area_struct *map = v;
++	struct vm_area_struct *tail_vma = priv->tail_vma;
++
+ 	(*pos)++;
+-	if (map->vm_next)
++	if (map && (map != tail_vma) && map->vm_next)
+ 		return map->vm_next;
+ 	m_stop(m, v);
+-	if (map != get_gate_vma(task))
+-		return get_gate_vma(task);
+-	return NULL;
++	return (map != tail_vma)? tail_vma: NULL;
+ }
+ 
+ struct seq_operations proc_pid_maps_op = {
+--- linux-2.6.9/arch/x86_64/mm/init.c.orig
++++ linux-2.6.9/arch/x86_64/mm/init.c
+@@ -644,14 +644,15 @@ static __init int x8664_sysctl_init(void
+ __initcall(x8664_sysctl_init);
+ #endif
+ 
+-/* A pseudo VMAs to allow ptrace access for the vsyscall page.   This only
++/* A pseudo VMA to allow ptrace access for the vsyscall page.  This only
+    covers the 64bit vsyscall page now. 32bit has a real VMA now and does
+    not need special handling anymore. */
+ 
+ static struct vm_area_struct gate_vma = {
+ 	.vm_start = VSYSCALL_START,
+-	.vm_end = VSYSCALL_END,
+-	.vm_page_prot = PAGE_READONLY
++	.vm_end = VSYSCALL_START + PAGE_SIZE,
++	.vm_page_prot = PAGE_READONLY_EXEC,
++	.vm_flags = VM_READ | VM_EXEC
+ };
+ 
+ struct vm_area_struct *get_gate_vma(struct task_struct *tsk)
